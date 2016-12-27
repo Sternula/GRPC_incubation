@@ -495,14 +495,33 @@ nestsSPDF <- SpatialPointsDataFrame( coords = nestLocs,
                                      proj4string = CRS( "+init=epsg:32610 +proj=utm +zone=14 +datumWGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0") )
 nestsSPDF <- spTransform( nestsSPDF, CRS( targProj ) )
 
-GRPC_dist <- raster( "data/distribution/GRPC_distribution/tym_cup_grpcp/w001001.adf" )
-load( "data/GRPC_NEdist.xy.RData" )
-
 # Grab map data for country, state, and county maps.
 usa <- map_data( "state" )
 nebraska <- map_data( "county", "nebraska" )
 brownCo <- nebraska %>%
   filter( subregion == "brown" )
+
+# Read in GRPC distribution raster (from USGS Gap Analysis Program).
+GRPC_dist <- raster( "data/distribution/GRPC_distribution/tym_cup_grpcp/w001001.adf" )
+
+# Find spatial extent of Nebraska for filtering species distribution raster.
+NEpts <- usa %>% 
+  filter( region == "nebraska" ) %>% 
+  dplyr::select( starts_with( "l" ) )
+NEpts <- SpatialPoints( coords = NEpts, 
+                        proj4string = CRS( targProj ) )
+NEpts <- spTransform( NEpts, CRS( proj4string( GRPC_dist ) ) )
+
+# Crop the distribution raster to Nebraska-size.
+GRPC_NEdist <- crop( x = GRPC_dist, y = NEpts )
+
+GRPC_NEdist.xy <- getXYcoords( GRPC_NEdist )
+GRPC_NEdist.v <- getValues( GRPC_NEdist )
+GRPC_NEdist.xyv <- list( x = GRPC_NEdist.xy$x, 
+                         y = GRPC_NEdist.xy$y, 
+                         v = GRPC_NEdist.v )
+rm( GRPC_NEdist.xy )
+rm( GRPC_NEdist.v )
 
 USmap <- ggplot( data = usa, 
                  aes( x = long, 
