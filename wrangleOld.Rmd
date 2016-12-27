@@ -1,0 +1,550 @@
+---
+title: "GRPC Incubation"
+author: "Ian Hoppe"
+date: "`r format( Sys.Date(), '%B %d, %Y' )`"
+output: 
+  bookdown::html_document2:
+    theme: cosmo
+    highlight: tango
+    number_sections: FALSE
+---
+
+```{r initializR, include = FALSE}
+
+knitr::opts_chunk$set( "echo" = FALSE,
+                       "message" = FALSE,
+                       "warning" = FALSE )
+
+```
+
+```{r pkgR}
+
+library( tidyverse )
+library( lubridate )
+library( SDMTools )
+library( mapdata )
+library( leaflet )
+library( raster )
+library( rgeos )
+library( rgdal )
+library( ggmap )
+library( maps )
+library( sp )
+
+```
+
+```{r impoRt}
+
+# Identify all the individual nest files and give them fRiendly names.
+hatchFiles <- sapply( X = list.files( path = "data/bouts/Hatch-Times" ),
+                      FUN = function( .nn ) gsub( pattern = "\\w*\\s*-\\s*(\\w+)\\s*-\\s*(201[0-9]{1})\\.csv",
+                                                  replacement = "hatch_\\1_\\2",
+                                                  x = .nn ) )
+failFiles <- sapply( X = list.files( path = "data/bouts/Fail-Times" ),
+                     FUN = function( .nn ) gsub( pattern = "\\w*\\s*-\\s*(\\w+)\\s*-\\s*(201[0-9]{1})\\.csv",
+                                                 replacement = "fail_\\1_\\2",
+                                                 x = .nn ) )
+
+# Read in the 'hatched' nest files.
+hatches <- list()
+for( i in 1:length( hatchFiles ) ){
+  fl <- paste( "data/bouts/Hatch-Times/", names( hatchFiles[ i ] ), sep = "" )
+  hatches[[ hatchFiles[[ i ]] ]] <- read.csv( fl, na.strings = "", stringsAsFactors = FALSE )
+  names( hatches[[ hatchFiles[[ i ]] ]] ) <- gsub( pattern = "(\\w*)\\.(\\w*)[\\.s?\\.]*",
+                                                   replacement = "\\1\\2",
+                                                   x = names( hatches[[ hatchFiles[[ i ]] ]] ) )
+  hatches[[ hatchFiles[[ i ]] ]]$fate_id_year <- hatchFiles[[ i ]]
+}
+
+# Read in the 'failed' nest files.
+fails <- list()
+for( i in 1:length( failFiles ) ){
+  fl <- paste( "data/bouts/Fail-Times/", names( failFiles[ i ] ), sep = "" )
+  fails[[ failFiles[[ i ]] ]] <- read.csv( fl, na.strings = "", stringsAsFactors = FALSE )
+  names( fails[[ failFiles[[ i ]] ]] ) <- gsub( pattern = "(\\w*)\\.(\\w*)[\\.s?\\.]*",
+                                                replacement = "\\1\\2",
+                                                x = names( fails[[ failFiles[[ i ]] ]] ) )
+  fails[[ failFiles[[ i ]] ]]$fate_id_year <- failFiles[[ i ]]
+}
+
+# Make a master by-event data.frame. Remove 'warming' observations, focusing just on off-bouts.
+bouts <- do.call( what = "rbind",
+                  args = c( hatches, fails ) ) %>%
+  separate( fate_id_year, c( "fate", "id", "year" ), sep = "_" ) %>%
+  filter( Event == "Off-bout" ) %>%
+  dplyr::select( -Event )
+
+# Try to make things lubridate-fRiendly.
+bouts$EventStart <- with( bouts, mdy_hm( paste( Date, EventStart ), tz = "America/Chicago" ) )
+
+##### <DECISION> #####
+# Accept the EventStart as the time of incubation initiation, but use 'Secs' as duration. Refresh EventEnd accordingly. (Second option goes with original EventEnd.)
+# Range of differences between values (Secs - (EventEnd-EventStart)): -14494 s -- 850 s
+bouts$EventEnd <- with( bouts, EventStart + duration( Secs, "seconds" ) )
+# bouts$EventEnd <- with( bouts, mdy_hm( paste( Date, EventEnd ), tz = "America/Chicago" ) )
+##### </DECISION> #####
+
+bouts$Date <- with( bouts, mdy( Date, tz = "America/Chicago" ) )
+bouts$EventDuration <- with( bouts, dseconds( EventStart %--% EventEnd ) )
+
+# ## Negative durations actually occured over midnight. Correct the date and recalculate the duration.
+# ## This bit became unnecessary when using the measured ('Secs') durations.
+# inds <- which( bouts$EventDuration < as.duration( 0 ) )
+# bouts$EventEnd[ inds ] <- bouts$EventEnd[ inds ] + days( 1 )
+# bouts$EventDuration[ inds ] <- with( bouts, dseconds( EventStart[ inds ] %--% EventEnd[ inds ] ) )
+#
+# ## Do you have the same time that I have?
+#
+# # 200 observations differ by ± 1s, for a total of 12s (R calc. 12s > Excel calc.)
+# bouts$secTest <- with( bouts, EndTime - BeginTime )
+# bouts$secDiff <- with( bouts, secTest - Secs )
+# length( bouts$secDiff[ which( bouts$secDiff != 0 ) ] ) # 200
+# range( bouts$secDiff[ which( bouts$secDiff != 0 ) ] ) # -1 1
+# sum( bouts$secDiff[ which( bouts$secDiff != 0 ) ] ) # 12
+#
+# # 910 observations differ by ± 0.6s, for a total of 2.8s (R calc. 12s > Excel calc.)
+# bouts$minTest <- with( bouts, Secs / 60 )
+# bouts$minDiff <- with( bouts, minTest - Mins )
+# length( bouts$minDiff[ which( bouts$minDiff != 0 ) ] ) # 910
+# range( bouts$minDiff[ which( bouts$minDiff != 0 ) ] ) * 60 # -0.6 0.6
+# sum( bouts$minDiff[ which( bouts$minDiff != 0 ) ] ) * 60 # 2.8
+#
+# # 1543 observations differ by ± 18s, for a total of 626s (R calc. 626s < Excel calc.)
+# bouts$hrTest <- with( bouts, Secs / 3600 )
+# bouts$hrDiff <- with( bouts, hrTest - Hrs )
+# length( bouts$hrDiff[ which( bouts$hrDiff != 0 ) ] ) # 1543
+# range( bouts$hrDiff[ which( bouts$hrDiff != 0 ) ] ) * 3600 # -18 18
+# sum( bouts$hrDiff[ which( bouts$hrDiff != 0 ) ] ) * 3600 # -626
+
+# Remove those likely to be erroneously identified (i.e., those ≤ 10 minutes in duration [n = 13]).
+bouts <- bouts %>%
+  filter( EventDuration > duration( 10, "minutes" ) )
+
+# Make a nest-by-day data.frame.
+dayBouts <- bouts %>%
+  group_by( id, Date ) %>%
+  summarize( Secs = sum( Secs ),
+             Mins = sum( Mins ),
+             Hrs = sum( Hrs ),
+             Bouts = n(),
+             fate = unique( fate ) )
+
+# Make a by-nest data.frame.
+nests <- bouts %>%
+  group_by( id ) %>%
+  summarize( Mins = sum( Mins ),
+             Bouts =  n(),
+             MeanBouts = n() / length( unique( Date ) ),
+             startDate = min( Date ),
+             finDate = max( Date ),
+             fate = unique( fate ) )
+
+# Add geographic information (distance to nearest wind turbine) to nest data.
+nestPos <- read.csv( "data/NestDistance.csv", stringsAsFactors = FALSE )
+nests <- inner_join( nestPos, nests, by = c( "Nest" = "id" ) )
+
+# Add vegetation information to nest data.
+nestVeg <- read.csv( "data/NestVeg.csv", na.strings = "N/A", stringsAsFactors = FALSE )
+nests <- inner_join( nestVeg, nests, by = c( "NestID" = "Nest" ) ) %>%
+  rename( measDate = Date ) %>%
+  mutate( measDate = mdy( measDate, tz = "America/Chicago" ) )
+
+vegKey <- data.frame( Term = c( "VOR", "VH", "LD", "PIE", "CS", "FORB", "SHR", "ANN", "CACT", "BG", "LIT", "SD", "PB", "WSB", "WSR", "WS" ),
+                      Definition = c( "Visual obstruction reading",
+                                      "Live vegetation height",
+                                      "Litter depth",
+                                      "Cow-pie",
+                                      "Cool-season grasses",
+                                      "Forbs",
+                                      "Shrubs",
+                                      "Annuals",
+                                      "Cacti",
+                                      "Bare ground",
+                                      "Litter",
+                                      "Standing dead vegetation",
+                                      "Plant base",
+                                      "Warm-season bunch grasses",
+                                      "Warm-season rhizomatous grasses",
+                                      "All warm-season grasses" ),
+                      Unit = c( "dm", "cm", "cm", rep( "%", 13 ) ) )
+
+# Add iButton and nest-fate information to the nest data. Calculate date of incubation initiation, if known (hatched nests).
+nestFate <- read.csv( file = "data/NestFate.csv", na.strings = "N/A", stringsAsFactors = FALSE ) %>%
+  mutate( Date_Nest_Found = mdy( Date_Nest_Found, tz = "America/Chicago" ),
+          Date_iButton_Start = mdy( Date_iButton_Start, tz = "America/Chicago" ),
+          Date_iButton_End = mdy( Date_iButton_End, tz = "America/Chicago" ),
+          Date_Nest_End = mdy( Date_Nest_End, tz = "America/Chicago" ),
+          NestFate_Uncertain = grepl( "\\?", paste( Nest_Success, Nest_Predated, Nest_Abandoned ) ),
+          Nest_Success = ifelse( grepl( "Y", Nest_Success, ignore.case = TRUE ), 1, 0 ),
+          Nest_Predated = ifelse( grepl( "Y", Nest_Predated, ignore.case = TRUE ), "Yes", ifelse( grepl( "N", Nest_Predated, ignore.case = TRUE ), "No" , "Unk" ) ),
+          Nest_Abandoned = ifelse( grepl( "Y", Nest_Abandoned, ignore.case = TRUE ), "Yes", ifelse( grepl( "N", Nest_Abandoned, ignore.case = TRUE ), "No", "Unk" ) ) )
+nests <- inner_join( nests, nestFate, by = c( "NestID", "UTM_E", "UTM_N", "measDate" = "Date_iButton_Start" ) ) %>%
+  mutate( Date_Incubation_Initiated = Date_Nest_End - duration( 27, "days" ) )
+nests$Date_Incubation_Initiated[ which( nests$Nest_Success != 1 ) ] <- NA
+
+# Calculate nest age for each day of off-bout data for each nest, if available.
+dayBouts$NestAge <- NA
+for( i in 1:nrow( dayBouts ) ){
+  nestId <- dayBouts$id[ i ]
+  initDate <- with( nests, Date_Incubation_Initiated[ which( NestID == nestId ) ] )
+  dayBouts$NestAge[ i ] <- with( dayBouts, as.numeric( Date[ i ] - initDate ) )
+}
+
+# Calculate nest age for each off-bout, if available.
+bouts$NestAge <- NA
+for( j in 1:nrow( bouts ) ){
+  nestId <- bouts$id[ j ]
+  initDate <- with( nests, Date_Incubation_Initiated[ which( NestID == nestId ) ] )
+  bouts$NestAge[ j ] <- with( bouts, as.numeric( Date[ j ] - initDate ) )
+}
+
+if( !exists( "iTemps" ) ){
+  
+  if( length( fl <- list.files( pattern = "iTemps.RData", recursive = TRUE ) ) > 0 ){
+    iTemps <- load( fl )
+  } else {
+    
+    # Read in iButton temperature data.
+    iTemps <- read.csv( "data/iButton/Ainsworth_iButtonMaster.csv", stringsAsFactors = FALSE ) %>%
+      mutate( DateTime = mdy_hms( DateTime, tz = "America/Chicago" ) )
+    
+    # Create a new column that will hold the incubation interval.
+    iTemps$NestInterval <- ymd_hms( "1900-01-01 00:00:00", tz = "America/Chicago" ) %--% ymd_hms( "1900-01-01 00:00:01", tz = "America/Chicago" )
+    for( nID in unique( iTemps$NestID ) ){
+      nestInt <- with( filter( nests, NestID == nID ), measDate %--% Date_Nest_End )
+      iTemps$NestInterval[ iTemps$NestID == nID ] <- nestInt
+    }
+    
+    # Filter out temperature observations made outside the incubation window.
+    iTemps <- iTemps %>%
+      filter( DateTime %within% NestInterval )
+    
+    # Create a nest-by-nest list of data.frames specifying the off-bout intervals.
+    offBouts <- bouts %>%
+      mutate( offTimes = EventStart %--% EventEnd,
+              boutNum = paste( id, seq_along( id ), sep = "_" ) ) %>%
+      dplyr::select( id, boutNum, offTimes )
+    offBouts <- split( x = offBouts,
+                       f = offBouts$id )
+    iTemps$onNest <- NA
+    for( o in 1:nrow( iTemps ) ){
+      tempObs <- iTemps[ o, ]
+      iTemps$onNest[ o ] <- !any( iTemps$DateTime[ o ] %within% offBouts[[ iTemps$NestID[ o ] ]]$offTimes )
+    }
+    save( iTemps, file = "data/iTemps.RData" )
+  }
+}
+
+# Read in weather data.
+weather <- read.csv( "data/AinsworthAmbientALL.csv", na.strings = " ", stringsAsFactors = FALSE ) %>%
+  mutate( Date = mdy( Date, tz = "America/Chicago" ),
+          Time = mdy_hm( paste( "01-01-2014", Time ), tz = "America/Chicago" ),
+          DateTime = mdy_hm( DateTime, tz = "America/Chicago" ),
+          DryBulbCelsius = as.numeric( DryBulbCelsius ) ) %>%
+  arrange( DateTime )
+
+# Using linear interpolation, estimate the approximate ambient temperature at the moment of off-bout initiation.
+bouts$AmbientTemp <- NA
+for( b in 1:nrow( bouts ) ){
+  boutStart <- bouts$EventStart[ b ]
+  boutWeather <- weather %>%
+    filter( year( DateTime ) == year( boutStart ) ) %>%
+    arrange( abs( DateTime - boutStart ) )
+  boutWeather <- boutWeather[ 1:2, ]
+  bouts$AmbientTemp[ b ] <- approx( x = boutWeather$DateTime,
+                                    y = boutWeather$DryBulbCelsius,
+                                    xout = boutStart )$y
+}
+
+```
+
+```{r astRonomy}
+
+# Read in 2013 sunrise/sunset times for Ainsworth (from USNO, Astronomical Applications Department, Washington, D.C., USA; accessed 20 Dec 2016)
+sun2013 <- read.table( file = "data/astronomy/sun2013.txt", header = TRUE, sep = "" ) %>%
+  gather( key = Month_Sun,
+          value = Time,
+          -Dy, na.rm = TRUE ) %>%
+  separate( col = Month_Sun,
+            into = c( "Month", "Sun" ),
+            sep = "_" ) %>%
+  spread( key = Sun,
+          value = Time )
+
+# Read in 2013 civil twilight times for Ainsworth (from USNO, Astronomical Applications Department, Washington, D.C., USA; accessed 20 Dec 2016)
+twi2013 <- read.table( file = "data/astronomy/twilight2013.txt", header = TRUE, sep = "" ) %>%
+  gather( key = Month_Sun,
+          value = Time,
+          -Dy, na.rm = TRUE ) %>%
+  separate( col = Month_Sun,
+            into = c( "Month", "Sun" ),
+            sep = "_" ) %>%
+  spread( key = Sun,
+          value = Time )
+
+# Combine 2013 astronomical data.
+sun2013 <- inner_join( x = sun2013,
+                       y = twi2013,
+                       by = c( "Month", "Dy" ) )
+sun2013$Year <- 2013
+sun2013 <- sun2013[ , c( 7, 2, 1, 3:6 ) ]
+names( sun2013 )[ 3:7 ] <- c( "Day", "Sunrise", "Sunset", "TwilightBegin", "TwilightEnd" )
+
+# Read in 2014 sunrise/sunset times for Ainsworth (from USNO, Astronomical Applications Department, Washington, D.C., USA; accessed 20 Dec 2016)
+sun2014 <- read.table( file = "data/astronomy/sun2014.txt", header = TRUE, sep = "" ) %>%
+  gather( key = Month_Sun,
+          value = Time,
+          -Dy, na.rm = TRUE ) %>%
+  separate( col = Month_Sun,
+            into = c( "Month", "Sun" ),
+            sep = "_" ) %>%
+  spread( key = Sun,
+          value = Time )
+
+# Read in 2014 civil twilight times for Ainsworth (from USNO, Astronomical Applications Department, Washington, D.C., USA; accessed 20 Dec 2016)
+twi2014 <- read.table( file = "data/astronomy/twilight2014.txt", header = TRUE, sep = "" ) %>%
+  gather( key = Month_Sun,
+          value = Time,
+          -Dy, na.rm = TRUE ) %>%
+  separate( col = Month_Sun,
+            into = c( "Month", "Sun" ),
+            sep = "_" ) %>%
+  spread( key = Sun,
+          value = Time )
+
+# Combine 2014 astronomical data.
+sun2014 <- inner_join( x = sun2014,
+                       y = twi2014,
+                       by = c( "Month", "Dy" ) )
+sun2014$Year <- 2014
+sun2014 <- sun2014[ , c( 7, 2, 1, 3:6 ) ]
+names( sun2014 )[ 3:7 ] <- c( "Day", "Sunrise", "Sunset", "TwilightBegin", "TwilightEnd" )
+
+# Compile all (2013+2014) astronomical data.
+sun <- bind_rows( sun2013, sun2014 )
+sun$Month <- as.integer( gsub( "X", "", sun$Month ) )
+sun$Sunrise <- gsub( pattern = "([1-9]{1})([0-9]{2})",
+                     replacement = "\\1:\\2",
+                     x = sun$Sunrise )
+sun$Sunset <- gsub( pattern = "([0-9]{2})([0-9]{2})",
+                    replacement = "\\1:\\2",
+                    x = sun$Sunset )
+sun$TwilightBegin <- gsub( pattern = "([1-9]{1})([0-9]{2})",
+                           replacement = "\\1:\\2",
+                           x = sun$TwilightBegin )
+sun$TwilightEnd <- gsub( pattern = "([0-9]{2})([0-9]{2})",
+                         replacement = "\\1:\\2",
+                         x = sun$TwilightEnd )
+
+# Teach R to recognize the dates and times.
+sun$Date <- with( sun, ymd( paste( Year, Month, Day, sep = "-" ), tz = "America/Chicago" ) )
+sun <- sun[ order( year( sun$Date ), yday( sun$Date ) ), c( 8, 4:7 ) ]
+row.names( sun ) <- NULL
+
+sun$Sunrise <- with( sun, ymd_hm( paste( ymd( Date ), Sunrise, sep = " " ), tz = "America/Chicago" ) )
+sun$Sunset <- with( sun, ymd_hm( paste( ymd( Date ), Sunset, sep = " " ), tz = "America/Chicago" ) )
+sun$TwilightBegin <- with( sun, ymd_hm( paste( ymd( Date ), sun$TwilightBegin, sep = " " ), tz = "America/Chicago" ) )
+sun$TwilightEnd <- with( sun, ymd_hm( paste( ymd( Date ), TwilightEnd, sep = " " ), tz = "America/Chicago" ) )
+
+# Make correction for Daylight Saving Time (not done in the original USNO data.)
+dstInts <- data.frame( dst2013 = ymd( "2013-03-10", tz = "America/Chicago" ) %--% ymd( "2013-11-03", tz = "America/Chicago" ),
+                       dst2014 = ymd( "2014-03-09", tz = "America/Chicago" ) %--% ymd( "2014-11-02", tz = "America/Chicago" ) )
+sun$DSTcorrection <- with( sun,
+                           ifelse( Date %within% dstInts$dst2013 | Date %within% dstInts$dst2014, 1, 0 ) )
+sun$DSTcorrection <- hours( sun$DSTcorrection )
+
+sun$Sunrise <- sun$Sunrise + sun$DSTcorrection
+sun$Sunset <- sun$Sunset + sun$DSTcorrection
+sun$TwilightBegin <- sun$TwilightBegin + sun$DSTcorrection
+sun$TwilightEnd <- sun$TwilightEnd + sun$DSTcorrection
+
+sun <- dplyr::select( sun, -DSTcorrection )
+
+# Set all time columns to same date for ease of handling.
+year( sun$Sunrise ) <- 2014
+year( sun$Sunset ) <- 2014
+year( sun$TwilightBegin ) <- 2014
+year( sun$TwilightEnd ) <- 2014
+yday( sun$Sunrise ) <- 1
+yday( sun$Sunset ) <- 1
+yday( sun$TwilightBegin ) <- 1
+yday( sun$TwilightEnd ) <- 1
+
+# Make a list of all the unique dates on which off-bouts occurred.
+dates2013 <- unique( bouts$Date )[ which( year( unique( bouts$Date ) ) == 2013 ) ]
+dates2014 <- unique( bouts$Date )[ which( year( unique( bouts$Date ) ) == 2014 ) ]
+
+# Calculate the overall (2013 & 2014) mean sunrise/sunset and twilight beginning and ending times across all dates on which off-bouts occurred. Mirror the twilight times around the sunrise/sunset.
+astro <- sun %>%
+  filter( Date %in% c( dates2013, dates2014 ) ) %>%
+  summarize( Sunrise = mean( Sunrise ),
+             Sunset = mean( Sunset ),
+             TwilightBegin = mean( TwilightBegin ),
+             TwilightEnd = mean( TwilightEnd ) ) %>%
+  rename( DawnBegin = TwilightBegin,
+          DuskEnd = TwilightEnd ) %>%
+  mutate( DawnEnd = Sunrise + ( Sunrise - DawnBegin ),
+          DuskBegin = Sunset - ( DuskEnd - Sunset ) ) %>%
+  dplyr::select( 3, 1, 5:6, 2, 4 )
+
+# Interestingly, the attributes (class and tzone) become mixed up during the final mutate. This led to problems in the creation of twiPoly.
+attributes( astro$DawnEnd ) <- attributes( astro$DawnBegin )
+attributes( astro$DuskBegin ) <- attributes( astro$DuskEnd )
+
+# Construct a data.frame with vertices for a polygon to denote twilight times in a freq(bout.initiation) ~ time.of.day histogram.
+dawnPoly <- astro %>%
+  dplyr::select( contains( "Dawn" ) ) %>%
+  gather( key = Event,
+          value = Time,
+          everything() )
+dawnPoly <- dawnPoly %>%
+  bind_rows( dawnPoly[ 2:1, ] ) %>%
+  bind_cols( data.frame( Y = c( 0, 0, Inf, Inf ) ) ) %>%
+  mutate( Event = "Dawn" )
+
+duskPoly <- astro %>%
+  dplyr::select( contains( "Dusk" ) ) %>%
+  gather( key = Event,
+          value = Time,
+          everything() )
+duskPoly <- duskPoly %>%
+  bind_rows( duskPoly[ c( 2, 1 ), ] ) %>%
+  bind_cols( data.frame( Y = c( 0, 0, Inf, Inf ) ) ) %>%
+  mutate( Event = "Dusk" )
+
+twiPoly <- bind_rows( dawnPoly, duskPoly )
+
+# xintercepts for the sunrise/sunset lines of the same histogram.
+sunLine <- astro %>%
+  dplyr::select( contains( "Sun" ) ) %>%
+  gather( key = Event,
+          value = Time,
+          everything() )
+
+```
+
+```{r weatheR}
+
+# Join weather and astronomical data, make indicator variables denoting whether weather recordings are made during daylight and twilight hours.
+weatherSun <- weather %>%
+  filter( Date %in% c( dates2013, dates2014 ) ) %>%
+  inner_join( sun, by = "Date" ) %>%
+  group_by( Date ) %>%
+  mutate( Daylight = Time %within% ( Sunrise %--% Sunset ),
+          Twilight = Time %within% ( TwilightBegin %--% TwilightEnd ) )
+
+# Summarize temperature by month.
+monthTemps <- weatherSun %>%
+  ungroup() %>%
+  group_by( Month, Day ) %>%
+  summarize( HighTemp = max( DryBulbCelsius, na.rm = TRUE ),
+             LowTemp = min( DryBulbCelsius, na.rm = TRUE ) ) %>%
+  ungroup() %>%
+  group_by( Month ) %>%
+  summarize( Avg_HighTemp = mean( HighTemp ),
+             Low_HighTemp = min( HighTemp ),
+             High_HighTemp = max( HighTemp ),
+             Avg_LowTemp = mean( LowTemp ),
+             Low_LowTemp = min( LowTemp ),
+             High_LowTemp = max( LowTemp ) )
+
+```
+
+```{r sandbox}
+
+boutsT <- bouts
+year( boutsT$EventStart ) <- 2014
+yday( boutsT$EventStart ) <- 1
+
+ggplot( data = filter( boutsT, Event == "Off-bout" ), 
+        aes( x = EventStart ) ) + 
+  geom_polygon( data = twiPoly, 
+                inherit.aes = FALSE, 
+                aes( x = Time, 
+                     y = Y, 
+                     group = Event ), 
+                alpha = 0.5 ) + 
+  geom_segment( data = sunLine, 
+                inherit.aes = FALSE, 
+                aes( x = Time, 
+                     xend = Time, 
+                     y = 0, 
+                     yend = Inf, 
+                     group = Event ) ) + 
+  geom_histogram( bins = 96, 
+                  colour = "white", 
+                  fill = "black" ) + 
+  scale_x_datetime( date_breaks = "60 min",
+                    date_labels = "%H:%M" ) + 
+  theme_classic() + 
+  theme( axis.text.x = element_text( angle = 45, 
+                                     hjust = 1 ) ) + 
+  labs( x = "Time", 
+        y = "Frequency" )
+
+```
+
+```{r mapR}
+
+nestLocs <- nests[ , c( "UTM_E", "UTM_N" ) ]
+
+nestsSPDF <- SpatialPointsDataFrame( coords = nestLocs,
+                                     data = nests,
+                                     proj4string = CRS( "+init=epsg:32610 +proj=utm +zone=14 +datumWGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0") )
+nestsSPDF <- spTransform( nestsSPDF, CRS( "+init=epsg:4326 +proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" ) )
+
+nebraska <- map_data( "county", "nebraska" )
+GRPC_dist <- raster( "data/distribution/GRPC_distribution/tym_cup_grpcp/w001001.adf" )
+NEmap <- ggplot( data = nebraska,
+                 aes( x = long,
+                      y = lat,
+                      group = group ) ) +
+  geom_polygon( fill = "grey",
+                colour = "black" ) +
+  geom_raster( data = GRPC_dist,
+               inherit.aes = FALSE ) +
+  coord_fixed( 1.3 ) +
+  theme_classic() +
+  theme( line = element_blank(),
+         text = element_blank() )
+NEmap
+NEmap <- ggplot( data = nebraska,
+                 aes( x = long,
+                      y = lat,
+                      group = group ) ) +
+  geom_polygon( fill = "grey",
+                colour = "black" ) +
+  # geom_raster( data = GRPC_dist,
+  #              inherit.aes = FALSE ) +
+  coord_fixed( 1.3 ) +
+  theme_classic() +
+  theme( line = element_blank(),
+         text = element_blank() )
+NEmap
+brownCo <- nebraska %>%
+  filter( subregion == "brown" )
+brownMap <- ggplot( data = brownCo,
+                    aes( x = long,
+                         y = lat,
+                         group = group ) ) +
+  geom_polygon( fill = "grey",
+                colour = "black" ) +
+  geom_point( data = data.frame( nestsSPDF@coords ),
+              inherit.aes = FALSE,
+              aes( x = UTM_E,
+                   y = UTM_N ) ) +
+  coord_fixed( 1.3 ) +
+  theme_classic() +
+  theme( line = element_blank(),
+         text = element_blank() )
+
+hatchPal <- colorFactor( palette = c( "mediumseagreen", "tomato" ), domain = c( "hatch", "fail" ), ordered = TRUE )
+
+leaflet( nestsSPDF ) %>% 
+  addTiles() %>% 
+  addCircleMarkers( stroke = FALSE, 
+                    color = ~hatchPal( fate ), 
+                    fillOpacity = 0.75, 
+                    popup = ~htmlEscape( Nest ) )
+
+```
