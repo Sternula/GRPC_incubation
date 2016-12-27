@@ -520,8 +520,13 @@ GRPC_NEdist.v <- getValues( GRPC_NEdist )
 GRPC_NEdist.xyv <- list( x = GRPC_NEdist.xy$x, 
                          y = GRPC_NEdist.xy$y, 
                          v = GRPC_NEdist.v )
-rm( GRPC_NEdist.xy )
-rm( GRPC_NEdist.v )
+
+rastMat <- with( GRPC_NEdist.xyv, 
+                 matrix( v, nrow = length( y ), ncol = length( x ), byrow = TRUE )[ length( y ):1, ] )
+rastInds <- which( !is.na( rastMat ), arr.ind = TRUE )
+GRPC_NEdist.xy <- data.frame( x = GRPC_NEdist.xyv$x[ rastInds[ , 1 ] ], 
+                              y = GRPC_NEdist.xyv$y[ rastInds[ , 2 ] ] )
+
 
 USmap <- ggplot( data = usa, 
                  aes( x = long, 
