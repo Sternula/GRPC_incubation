@@ -29,6 +29,8 @@ library( rgeos )
 library( rgdal )
 library( ggmap )
 library( maps )
+library( grid )
+library( lme4 )
 library( sp )
 
 ```
@@ -501,37 +503,50 @@ nebraska <- map_data( "county", "nebraska" )
 brownCo <- nebraska %>%
   filter( subregion == "brown" )
 
-# Read in GRPC distribution raster (from USGS Gap Analysis Program).
-GRPC_dist <- raster( "data/distribution/GRPC_distribution/tym_cup_grpcp/w001001.adf" )
+# # Read in GRPC distribution raster (from USGS Gap Analysis Program).
+# GRPC_dist <- raster( "data/distribution/GRPC_distribution/tym_cup_grpcp/w001001.adf" )
+# 
+# # Find spatial extent of Nebraska for filtering species distribution raster.
+# NEpts <- usa %>% 
+#   filter( region == "nebraska" ) %>% 
+#   dplyr::select( starts_with( "l" ) )
+# NEpts <- SpatialPoints( coords = NEpts, 
+#                         proj4string = CRS( targProj ) )
+# NEpts <- spTransform( NEpts, CRS( proj4string( GRPC_dist ) ) )
+# 
+# # Crop the distribution raster to Nebraska-size.
+# GRPC_NEdist <- crop( x = GRPC_dist, y = NEpts )
+# 
+# GRPC_NEdist.xy <- getXYcoords( GRPC_NEdist )
+# GRPC_NEdist.v <- getValues( GRPC_NEdist )
+# GRPC_NEdist.xyv <- list( x = GRPC_NEdist.xy$x, 
+#                          y = GRPC_NEdist.xy$y, 
+#                          v = GRPC_NEdist.v )
+# 
+# rastMat <- with( GRPC_NEdist.xyv, 
+#                  matrix( v, nrow = length( y ), ncol = length( x ), byrow = TRUE )[ length( y ):1, ] )
+# rastInds <- which( !is.na( rastMat ), arr.ind = TRUE )
+# GRPC_NEdist.xy <- data.frame( x = GRPC_NEdist.xyv$x[ rastInds[ , 1 ] ], 
+#                               y = GRPC_NEdist.xyv$y[ rastInds[ , 2 ] ] )
 
-# Find spatial extent of Nebraska for filtering species distribution raster.
-NEpts <- usa %>% 
-  filter( region == "nebraska" ) %>% 
-  dplyr::select( starts_with( "l" ) )
-NEpts <- SpatialPoints( coords = NEpts, 
-                        proj4string = CRS( targProj ) )
-NEpts <- spTransform( NEpts, CRS( proj4string( GRPC_dist ) ) )
-
-# Crop the distribution raster to Nebraska-size.
-GRPC_NEdist <- crop( x = GRPC_dist, y = NEpts )
-
-GRPC_NEdist.xy <- getXYcoords( GRPC_NEdist )
-GRPC_NEdist.v <- getValues( GRPC_NEdist )
-GRPC_NEdist.xyv <- list( x = GRPC_NEdist.xy$x, 
-                         y = GRPC_NEdist.xy$y, 
-                         v = GRPC_NEdist.v )
-
-rastMat <- with( GRPC_NEdist.xyv, 
-                 matrix( v, nrow = length( y ), ncol = length( x ), byrow = TRUE )[ length( y ):1, ] )
-rastInds <- which( !is.na( rastMat ), arr.ind = TRUE )
-GRPC_NEdist.xy <- data.frame( x = GRPC_NEdist.xyv$x[ rastInds[ , 1 ] ], 
-                              y = GRPC_NEdist.xyv$y[ rastInds[ , 2 ] ] )
-
+USbox <- with( usa, 
+               data.frame( xmin = floor( min( long ) ), 
+                           xmax = ceiling( max( long ) ), 
+                           ymin = floor( min( lat ) ), 
+                           ymax = ceiling( max( lat ) ) ) )
 
 USmap <- ggplot( data = usa, 
                  aes( x = long, 
                       y = lat, 
                       group = group ) ) + 
+  geom_rect( data = USbox, 
+             inherit.aes = FALSE, 
+             aes( xmin = xmin - ( 0.05 * ( xmax - xmin ) ), 
+                  xmax = xmax + ( 0.05 * ( xmax - xmin ) ), 
+                  ymin = ymin - ( 0.05 * ( ymax - ymin ) ), 
+                  ymax = ymax + ( 0.05 * ( ymax - ymin ) ) ), 
+             alpha = 0, 
+             colour = "black" ) + 
   geom_polygon( fill = "grey", 
                 colour = "black" ) + 
   geom_polygon( data = filter( usa, region == "nebraska" ) ) + 
@@ -545,7 +560,8 @@ NEmap <- ggplot( data = nebraska,
                       y = lat,
                       group = group ) ) +
   geom_polygon( fill = "grey",
-                colour = "black" ) +
+                colour = "black" ) + 
+  geom_polygon( data = filter( nebraska, subregion == "brown" ) ) + 
   coord_fixed( 1.3 ) +
   theme_classic() +
   theme( line = element_blank(),
@@ -564,7 +580,9 @@ brownMap <- ggplot( data = brownCo,
   coord_fixed( 1.3 ) +
   theme_classic() +
   theme( line = element_blank(),
-         text = element_blank() )
+         text = element_blank(), 
+         plot.background = element_rect( fill = "transparent" ), 
+         panel.background = element_rect( fill = "transparent" ) )
 
 # hatchPal <- colorFactor( palette = c( "mediumseagreen", "tomato" ), domain = c( "hatch", "fail" ), ordered = TRUE )
 # 
@@ -576,3 +594,29 @@ brownMap <- ggplot( data = brownCo,
 #                     popup = ~htmlEscape( Nest ) )
 
 ```
+
+```{r mapFiguRe}
+
+grid.newpage()
+v1 <- viewport( x = 0.5, y = 0.75, width = 1, height = 1 )
+v2 <- viewport( x = 0.2, y = 0.15, width = 0.39, height = 0.3 )
+v3 <- viewport( x = 0.75, y = 0.25, width = 0.4, height = 0.52 )
+print( NEmap, vp = v1 )
+print( USmap, vp = v2 )
+grid.segments( x0 = 0.16, y0 = 0.175, x1 = 0.059, y1 = 0.695 )
+grid.segments( x0 = 0.21, y0 = 0.17, x1 = 0.945, y1 = 0.575 )
+grid.segments( x0 = 0.45, y0 = 0.85, x1 = 0.67, y1 = 0.04 )
+print( brownMap, vp = v3 )
+
+```
+
+```{r}
+
+aBouts <- bouts %>% 
+  mutate( fid = factor( id ), 
+          jday = yday( EventStart ) )
+
+m1 <- lmer( Mins ~ NestAge * AmbientTemp + jday + ( 1 | fid ), data = aBouts )
+
+```
+
