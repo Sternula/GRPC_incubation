@@ -22,6 +22,7 @@ knitr::opts_chunk$set( "echo" = FALSE,
 library( tidyverse )
 library( lubridate )
 library( SDMTools )
+library( maptools )
 library( mapdata )
 library( leaflet )
 library( raster )
@@ -31,11 +32,14 @@ library( ggmap )
 library( maps )
 library( grid )
 library( lme4 )
+library( MASS )
 library( sp )
 
 ```
 
 ```{r impoRt}
+
+#### Load off-bout files. #####
 
 # Identify all the individual nest files and give them fRiendly names.
 hatchFiles <- sapply( X = list.files( path = "data/bouts/Hatch-Times" ),
@@ -69,6 +73,8 @@ for( i in 1:length( failFiles ) ){
   fails[[ failFiles[[ i ]] ]]$fate_id_year <- failFiles[[ i ]]
 }
 
+##### Initial processing of off-bout data. #####
+
 # Make a master by-event data.frame. Remove 'warming' observations, focusing just on off-bouts.
 bouts <- do.call( what = "rbind",
                   args = c( hatches, fails ) ) %>%
@@ -79,12 +85,12 @@ bouts <- do.call( what = "rbind",
 # Try to make things lubridate-fRiendly.
 bouts$EventStart <- with( bouts, mdy_hm( paste( Date, EventStart ), tz = "America/Chicago" ) )
 
-##### <DECISION> #####
+#### <DECISION> ####
 # Accept the EventStart as the time of incubation initiation, but use 'Secs' as duration. Refresh EventEnd accordingly. (Second option goes with original EventEnd.)
 # Range of differences between values (Secs - (EventEnd-EventStart)): -14494 s -- 850 s
 bouts$EventEnd <- with( bouts, EventStart + duration( Secs, "seconds" ) )
 # bouts$EventEnd <- with( bouts, mdy_hm( paste( Date, EventEnd ), tz = "America/Chicago" ) )
-##### </DECISION> #####
+#### </DECISION> ####
 
 bouts$Date <- with( bouts, mdy( Date, tz = "America/Chicago" ) )
 bouts$EventDuration <- with( bouts, dseconds( EventStart %--% EventEnd ) )
@@ -122,7 +128,9 @@ bouts$EventDuration <- with( bouts, dseconds( EventStart %--% EventEnd ) )
 bouts <- bouts %>%
   filter( EventDuration > duration( 10, "minutes" ) )
 
-# Make a nest-by-day data.frame.
+##### Construction of derived data.frames. #####
+
+# Make a by-nest*day data.frame.
 dayBouts <- bouts %>%
   group_by( id, Date ) %>%
   summarize( Secs = sum( Secs ),
@@ -141,15 +149,19 @@ nests <- bouts %>%
              finDate = max( Date ),
              fate = unique( fate ) )
 
-# Add geographic information (distance to nearest wind turbine) to nest data.
+##### Reading-in of ancillary data. #####
+
+# Add geographic information to nest data. Create a categorical variable indicating whether or not a turbine exists within 1km of the nest.
 nestPos <- read.csv( "data/NestDistance.csv", stringsAsFactors = FALSE )
-nests <- inner_join( nestPos, nests, by = c( "Nest" = "id" ) )
+nests <- inner_join( nestPos, nests, by = c( "Nest" = "id" ) ) %>% 
+  mutate( Turbine_within_1km = Turbine_Distance_m <= 1000 )
 
 # Add vegetation information to nest data.
 nestVeg <- read.csv( "data/NestVeg.csv", na.strings = "N/A", stringsAsFactors = FALSE )
 nests <- inner_join( nestVeg, nests, by = c( "NestID" = "Nest" ) ) %>%
   rename( measDate = Date ) %>%
-  mutate( measDate = mdy( measDate, tz = "America/Chicago" ) )
+  mutate( measDate = mdy( measDate, tz = "America/Chicago" ) ) %>% 
+  dplyr::select( c( 1:5, 12, 54, 60:73 ) )
 
 vegKey <- data.frame( Term = c( "VOR", "VH", "LD", "PIE", "CS", "FORB", "SHR", "ANN", "CACT", "BG", "LIT", "SD", "PB", "WSB", "WSR", "WS" ),
                       Definition = c( "Visual obstruction reading",
@@ -184,6 +196,8 @@ nests <- inner_join( nests, nestFate, by = c( "NestID", "UTM_E", "UTM_N", "measD
   mutate( Date_Incubation_Initiated = Date_Nest_End - duration( 27, "days" ) )
 nests$Date_Incubation_Initiated[ which( nests$Nest_Success != 1 ) ] <- NA
 
+##### Nest-age calculations. #####
+
 # Calculate nest age for each day of off-bout data for each nest, if available.
 dayBouts$NestAge <- NA
 for( i in 1:nrow( dayBouts ) ){
@@ -200,10 +214,12 @@ for( j in 1:nrow( bouts ) ){
   bouts$NestAge[ j ] <- with( bouts, as.numeric( Date[ j ] - initDate ) )
 }
 
+##### Load iButton temperature data. #####
+
 if( !exists( "iTemps" ) ){
   
   if( length( fl <- list.files( pattern = "iTemps.RData", recursive = TRUE ) ) > 0 ){
-    iTemps <- load( fl )
+    load( fl )
   } else {
     
     # Read in iButton temperature data.
@@ -221,21 +237,27 @@ if( !exists( "iTemps" ) ){
     iTemps <- iTemps %>%
       filter( DateTime %within% NestInterval )
     
-    # Create a nest-by-nest list of data.frames specifying the off-bout intervals.
+    # Create a nest-by-nest list of data.frames specifying the off-bout intervals. Split it into a by-nest list of data.frames.
     offBouts <- bouts %>%
       mutate( offTimes = EventStart %--% EventEnd,
               boutNum = paste( id, seq_along( id ), sep = "_" ) ) %>%
       dplyr::select( id, boutNum, offTimes )
     offBouts <- split( x = offBouts,
                        f = offBouts$id )
+    
+    # Create a new column in the iTemp data.frame indicating whether or not the hen was on the nest at the time the measurement was made.
     iTemps$onNest <- NA
     for( o in 1:nrow( iTemps ) ){
       tempObs <- iTemps[ o, ]
       iTemps$onNest[ o ] <- !any( iTemps$DateTime[ o ] %within% offBouts[[ iTemps$NestID[ o ] ]]$offTimes )
+      
     }
     save( iTemps, file = "data/iTemps.RData" )
   }
+  
 }
+
+##### More ancillary data! #####
 
 # Read in weather data.
 weather <- read.csv( "data/AinsworthAmbientALL.csv", na.strings = " ", stringsAsFactors = FALSE ) %>%
@@ -248,15 +270,40 @@ weather <- read.csv( "data/AinsworthAmbientALL.csv", na.strings = " ", stringsAs
 # Using linear interpolation, estimate the approximate ambient temperature at the moment of off-bout initiation.
 bouts$AmbientTemp <- NA
 for( b in 1:nrow( bouts ) ){
+  
+  # Extract the start time of the off-bout.
   boutStart <- bouts$EventStart[ b ]
-  boutWeather <- weather %>%
+  
+  # Isolate the weather data from the same year pull out the two weather records closest in time to the start of the off-bout.
+  boutWeather <- weather %>% 
+    dplyr::select( DateTime, DryBulbCelsius ) %>% 
     filter( year( DateTime ) == year( boutStart ) ) %>%
     arrange( abs( DateTime - boutStart ) )
   boutWeather <- boutWeather[ 1:2, ]
+  
+  # Interpolate the ambient temperature based on the two nearest weather records. If the two nearest records are to one side (temporally) of the off-bout initiation time, the ambient temperature is taken to be the recorded temperature at the time nearest the start time (rule=2).
   bouts$AmbientTemp[ b ] <- approx( x = boutWeather$DateTime,
                                     y = boutWeather$DryBulbCelsius,
-                                    xout = boutStart )$y
+                                    xout = boutStart, 
+                                    rule = 2 )$y
 }
+
+##### Master data.frame. #####
+
+# Make a data.frame containing both nest-specific and event-specific information. Nest-specific data are repeated!!!
+fullBouts <- left_join( x = bouts, 
+                        y = nests, 
+                        by = c( "id" = "NestID", "fate" = "fate" ) ) %>% 
+  rename( Mins = Mins.x, 
+          TotalMinsOff = Mins.y ) %>% 
+  mutate( fID = factor( id ), 
+          Jday = yday( EventStart ), 
+          EventStart_dl = EventStart, 
+          fYear = factor( year ) )
+
+# Adding dateless columns for the time data should make things simpler (I hope).
+year( fullBouts$EventStart_dl ) <- 2014
+yday( fullBouts$EventStart_dl ) <- 1
 
 ```
 
@@ -529,6 +576,19 @@ brownCo <- nebraska %>%
 # GRPC_NEdist.xy <- data.frame( x = GRPC_NEdist.xyv$x[ rastInds[ , 1 ] ], 
 #                               y = GRPC_NEdist.xyv$y[ rastInds[ , 2 ] ] )
 
+# Or not. Try the range .dbf (cropped and converted to a shapefile in ArcGIS on a separate machine by WJH) instead (also from USGS Gan Analysis Program).
+GRPC_range <- readOGR( dsn = "data/distribution/GRPC_range/GPC_Range_NE", 
+                       layer = "GPC_Range_NE" )
+
+# Bring the GRPC_range shp into the desired projection and datum.
+GRPC_range <- spTransform( GRPC_range, targProj )
+
+# Prepare the range data for plotting with ggplot2.
+GRPC_range@data$id <- rownames( GRPC_range@data )
+GRPC_range.pts <- fortify( GRPC_range, region = "id" )
+GRPC_range.df <- merge( GRPC_range.pts, GRPC_range@data, by = "id" )
+
+
 USbox <- with( usa, 
                data.frame( xmin = floor( min( long ) ), 
                            xmax = ceiling( max( long ) ), 
@@ -555,17 +615,35 @@ USmap <- ggplot( data = usa,
   theme( line = element_blank(), 
          text = element_blank() )
 
+GRPC_range.poly <- SpatialPolygons( Srl = list( GRPC_range = Polygons( srl = lapply( X = split( x = GRPC_range.df, f = GRPC_range.df$group ), 
+                                                                                     FUN = function( .df ) Polygon( coords = .df[ , c( "long", "lat" ) ], 
+                                                                                                                    hole = .df$hole ) ), 
+                                                                       ID = "GRPC_range" ) ), 
+                                    proj4string = CRS( targProj ) )
+
+NE_poly <- SpatialPolygons( Srl = list( NE_outline = Polygons( srl = list( Polygon( coords = filter( usa, region == "nebraska" )[ , c( "long", "lat" ) ], 
+                                                                                    hole = FALSE ) ), 
+                                          ID = "NE_outline" ) ), 
+                            proj4string = CRS( targProj ) )
+
+GRPC_range.dfc <- fortify( gIntersection( spgeom1 = GRPC_range.poly, spgeom2 = NE_poly ) )
+
 NEmap <- ggplot( data = nebraska,
                  aes( x = long,
                       y = lat,
                       group = group ) ) +
   geom_polygon( fill = "grey",
                 colour = "black" ) + 
+  geom_polygon( data = GRPC_range.dfc, 
+                aes( group = group ), 
+                alpha = 0.6 ) + 
   geom_polygon( data = filter( nebraska, subregion == "brown" ) ) + 
   coord_fixed( 1.3 ) +
   theme_classic() +
   theme( line = element_blank(),
          text = element_blank() )
+
+NEmap
 
 brownMap <- ggplot( data = brownCo,
                     aes( x = long,
@@ -603,20 +681,235 @@ v2 <- viewport( x = 0.2, y = 0.15, width = 0.39, height = 0.3 )
 v3 <- viewport( x = 0.75, y = 0.25, width = 0.4, height = 0.52 )
 print( NEmap, vp = v1 )
 print( USmap, vp = v2 )
-grid.segments( x0 = 0.16, y0 = 0.175, x1 = 0.059, y1 = 0.695 )
-grid.segments( x0 = 0.21, y0 = 0.17, x1 = 0.945, y1 = 0.575 )
-grid.segments( x0 = 0.45, y0 = 0.85, x1 = 0.67, y1 = 0.04 )
+# grid.segments( x0 = 0.16, y0 = 0.175, x1 = 0.059, y1 = 0.695 )
+# grid.segments( x0 = 0.21, y0 = 0.17, x1 = 0.945, y1 = 0.575 )
+# grid.segments( x0 = 0.45, y0 = 0.85, x1 = 0.67, y1 = 0.04 )
 print( brownMap, vp = v3 )
 
 ```
 
-```{r}
+```{r exploRe, eval = FALSE}
 
-aBouts <- bouts %>% 
-  mutate( fid = factor( id ), 
-          jday = yday( EventStart ) )
+# For the duration response, a log-transformation looks pretty good. It's bounded at zero and never assumes a value of zero, so this seems like a good approach. The response also isn't discrete, so a Poisson error distribution is not an option.
+hist( fullBouts$Mins )
+hist( log( fullBouts$Mins ) )
 
-m1 <- lmer( Mins ~ NestAge * AmbientTemp + jday + ( 1 | fid ), data = aBouts )
+hist( fullBouts$EventStart_dl, breaks = "mins" )
 
 ```
 
+```{r functionR}
+
+# ccheck compiles modelwise diagnostics for convergence and failure of merMods.
+ccheck <- function( .mm ){
+  
+  if( is.list( .mm ) ){
+    
+    fail <- sapply( .mm, function( .x ) !is.null( .x@optinfo$conv$lme4$messages ) )
+    relgrad <- sapply( .mm, function( .x ) max( abs( with( .x@optinfo$derivs, solve( Hessian, gradient ) ) ) ) )
+    gfail <- relgrad >= 0.001
+    minT <- sapply( .mm, function( .x ) min( getME( .x, "theta" )[ getME( .x, "lower" ) == 0 ] ) )
+    singular <- minT <= 0.000001
+    
+    results <- data.frame( mod = names( fail ), 
+                           fail = fail, 
+                           relgrad = relgrad, 
+                           gfail = gfail, 
+                           minT = minT, 
+                           singular = singular)
+    
+  }else{
+    
+    fail <- !is.null( .mm@optinfo$conv$lme4$messages )
+    relgrad <- max( abs( with( .mm@optinfo$derivs, solve( Hessian, gradient ) ) ) )
+    gfail <-  relgrad >= 0.001
+    minT <- min( getME( .mm, "theta" )[ getME( .mm, "lower" ) == 0 ] )
+    singular <- minT <= 0.000001
+    
+    results <- data.frame( fail = fail, 
+                           relgrad = relgrad, 
+                           gfail = gfail, 
+                           minT = minT, 
+                           singular = singular )
+    
+  }
+  
+  return( results )
+  
+}
+
+convCheckR <- function( .lmer ){
+  
+  if( is.list( .lmer ) ){
+    
+    nObs <- sapply( .lmer, function( .mm ) getME( .mm, "N" ) )
+    names( nObs ) <- gsub( "\\.N$", "", names( nObs ) )
+    nObs.true <- sapply( .lmer, function( .mm ) nrow( eval( .mm@call$data ) ) )
+    nFE <- sapply( .lmer, function( .mm ) length( getME( .mm, "beta" ) ) )
+    theta <- sapply( .lmer, function( .mm ) getME( .mm, "theta" ) )
+    nRE <- sapply( theta, length )
+    
+    Warn_rescale <- sapply( .lmer, function( .mm ) any( grepl( "rescale", 
+                                                               .mm@optinfo$conv$lme4$messages, 
+                                                               ignore.case = TRUE ) ) )
+    Warn_grad <- sapply( .lmer, function( .mm ) any( grepl( "grad", 
+                                                            .mm@optinfo$conv$lme4$messages, 
+                                                            ignore.case = TRUE ) ) )
+    Warn_unID <- sapply( .lmer, function( .mm ) any( grepl( "unidentifiable", 
+                                                            .mm@optinfo$conv$lme4$messages, 
+                                                            ignore.case = TRUE ) ) )
+    
+    lowerBound <- sapply( .lmer, function( .mm ) getME( .mm, "lower" ) )
+    singular <- map2_lgl( .x = theta, 
+                          .y = lowerBound, 
+                          .f = function( .tt, .ll ) min( .tt[ .ll == 0 ] ) < 1e-5 )
+    
+    derivs <- lapply( .lmer, function( .mm ) .mm@optinfo$derivs )
+    sc.grad <- sapply( derivs, function( .dd ) with( .dd, solve( Hessian, gradient ) ) )
+    max.abs.sc.grad <- sapply( sc.grad, function( .gg ) max( abs( .gg ) ) )
+    large.abs.max.sc.grad <- max.abs.sc.grad > 0.001
+    par.min.grad <- map2_dbl( .x = sc.grad, 
+                              .y = derivs, 
+                              .f = function( .sc, .dd ) max( pmin( abs( .sc ), abs( .dd$gradient ) ) ) )
+    large.par.min.grad <- par.min.grad > 0.001
+    
+    diagnostic <- data.frame( nObs = nObs, 
+                              nObs.true = nObs.true, 
+                              nFE = nFE, 
+                              nRE = nRE, 
+                              singular = singular, 
+                              MaxGrad = max.abs.sc.grad, 
+                              LargeMaxGrad = large.abs.max.sc.grad, 
+                              ParGrad = par.min.grad, 
+                              LargeParGrad = large.par.min.grad, 
+                              WarnGrad = Warn_grad, 
+                              UnID = Warn_unID, 
+                              Rescale = Warn_rescale )
+    
+  }else{
+    
+    nObs <- getME( .lmer, "N" )
+    nObs.true <- nrow( eval( .lmer@call$data ) )
+    nFE <- length( getME( .lmer, "beta" ) )
+    theta <- getME( .lmer, "theta" )
+    nRE <- length( theta )
+    
+    Warn_rescale <- any( grepl( "rescale", 
+                                .lmer@optinfo$conv$lme4$messages, 
+                                ignore.case = TRUE ) )
+    Warn_grad <- any( grepl( "grad", 
+                             .lmer@optinfo$conv$lme4$messages, 
+                             ignore.case = TRUE ) )
+    Warn_unID <- any( grepl( "unidentifiable", 
+                             .lmer@optinfo$conv$lme4$messages, 
+                             ignore.case = TRUE ) )
+    
+    lowerBound <- getME( .lmer, "lower" )
+    singular <- min( theta[ lowerBound == 0 ] ) < 1e-5
+    
+    derivs <- .lmer@optinfo$derivs
+    sc.grad <- with( derivs, solve( Hessian, gradient ) )
+    max.abs.sc.grad <- max( abs( sc.grad ) )
+    large.abs.max.sc.grad <- max.abs.sc.grad > 0.001
+    par.min.grad <- max( pmin( abs( sc.grad ), abs( derivs$gradient ) ) )
+    large.par.min.grad <- par.min.grad > 0.001
+    
+    diagnostic <- data.frame( nObs = nObs, 
+                              nObs.true = nObs.true, 
+                              nFE = nFE, 
+                              nRE = nRE, 
+                              singular = singular, 
+                              MaxGrad = max.abs.sc.grad, 
+                              LargeMaxGrad = large.abs.max.sc.grad, 
+                              ParGrad = par.min.grad, 
+                              LargeParGrad = large.par.min.grad, 
+                              WarnGrad = Warn_grad, 
+                              UnID = Warn_unID, 
+                              Rescale = Warn_rescale )
+    
+  }
+  
+  return( diagnostic )
+  
+}
+
+
+```
+
+```{r analyzeR}
+
+globalMinsMod <- "Mins ~ fYear + NestAge * AmbientTemp + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday + Nest_Success"
+globalMinsMod <- "Mins ~ NestAge * AmbientTemp + Jday"
+
+
+# Histograms suggest and Box-Cox power transformation confirms a log-transformation on the duration variable might not be a bad thing. Done.
+bcMinTransform <- boxcox( as.formula( globalMinsMod ), 
+                          data = fullBouts, 
+                          plotit = FALSE )
+l_est <- bcMinTransform$x[ which.max( bcMinTransform$y ) ]
+fullBouts$tMins <- ifelse( test = rep( l_est != 0, length( fullBouts$Mins ) ), 
+                           yes = fullBouts$Mins^l_est, 
+                           no = log( fullBouts$Mins ) )
+
+globalMinsMod <- paste( "t", globalMinsMod, sep = "" )
+
+dur.ranef <- list( int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # year = lmer( as.formula( paste( globalMinsMod, " + ( year - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # year.int = lmer( as.formula( paste( globalMinsMod, " + ( year | fID )", sep = "" ) ), data = fullBouts ), 
+                   # year_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( year - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   age = lmer( as.formula( paste( globalMinsMod, " + ( NestAge - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   age.int = lmer( as.formula( paste( globalMinsMod, " + ( NestAge | fID )", sep = "" ) ), data = fullBouts ), 
+                   age_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( NestAge - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   age.temp = lmer( as.formula( paste( globalMinsMod, " + ( NestAge * AmbientTemp - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   age.temp.int = lmer( as.formula( paste( globalMinsMod, " + ( NestAge * AmbientTemp | fID )", sep = "" ) ), data = fullBouts ), 
+                   age.temp_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( NestAge * AmbientTemp - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   temp = lmer( as.formula( paste( globalMinsMod, " + ( AmbientTemp - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   temp.int = lmer( as.formula( paste( globalMinsMod, " + ( AmbientTemp | fID )", sep = "" ) ), data = fullBouts ), 
+                   temp_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( AmbientTemp - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # vor = lmer( as.formula( paste( globalMinsMod, " + ( VOR_AVG - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # vor.int = lmer( as.formula( paste( globalMinsMod, " + ( VOR_AVG | fID )", sep = "" ) ), data = fullBouts ), 
+                   # vor_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( VOR_AVG - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # turb = lmer( as.formula( paste( globalMinsMod, " + ( Turbine_within_1km - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # turb.int = lmer( as.formula( paste( globalMinsMod, " + ( Turbine_within_1km | fID )", sep = "" ) ), data = fullBouts ), 
+                   # turb_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Turbine_within_1km - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # road = lmer( as.formula( paste( globalMinsMod, " + ( Roads_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # road.int = lmer( as.formula( paste( globalMinsMod, " + ( Roads_Distance_m | fID )", sep = "" ) ), data = fullBouts ), 
+                   # road_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Roads_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # h2o = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # h2o.int = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m | fID )", sep = "" ) ), data = fullBouts ), 
+                   # h2o_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Water_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # h2o.Jday = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # h2o.Jday.int = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m * Jday | fID )", sep = "" ) ), data = fullBouts ), 
+                   # h2o.Jday_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   Jday = lmer( as.formula( paste( globalMinsMod, " + ( Jday - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   Jday.int = lmer( as.formula( paste( globalMinsMod, " + ( Jday | fID )", sep = "" ) ), data = fullBouts ), 
+                   Jday_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Jday - 1 | fID )", sep = "" ) ), data = fullBouts ) )#, 
+                   # nSuc = lmer( as.formula( paste( globalMinsMod, " + ( Nest_Success - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # nSuc.int = lmer( as.formula( paste( globalMinsMod, " + ( Nest_Success | fID )", sep = "" ) ), data = fullBouts ), 
+                   # nSuc_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Nest_Success - 1 | fID )", sep = "" ) ), data = fullBouts ) )
+
+
+convCheckR( dur.ranef ) # age.temp, age.temp.int, age.temp_int, Jday, and Jday.int fail, but age.temp and Jday with OK relative gradients. age.temp, age.temp.int, and Jday_int singular
+
+# Try scaling and centering continuous variables.
+
+csfullBouts <- fullBouts %>% 
+  mutate( NestAge = ( NestAge / sd( NestAge, na.rm = TRUE ) - mean( NestAge, na.rm = TRUE ) ), 
+          AmbientTemp = ( AmbientTemp / sd( AmbientTemp, na.rm = TRUE ) ) - mean( AmbientTemp, na.rm = TRUE ), 
+          Jday = ( Jday / sd( Jday ) ) - mean( Jday ) )
+# contrasts( csfullBouts$fID ) <- contr.sum( length( levels( csfullBouts$fID ) ) )
+
+dur.ranef_cs <- lapply( X = dur.ranef, 
+                        FUN = function( .mm ) update( .mm, data = csfullBouts ) )
+
+convCheckR( dur.ranef_cs ) # That actually seems to have made things worse. Do I also need to set the contrasts on the grouping variable?
+
+cszfullBouts <- csfullBouts
+contrasts( cszfullBouts$fID ) <- contr.sum( length( levels( cszfullBouts$fID ) ) )
+
+dur.ranef_csz <- lapply( X = dur.ranef, 
+                         FUN = function( .mm ) update( .mm, data = cszfullBouts ) )
+
+convCheckR( dur.ranef_csz )
+
+```
