@@ -1,0 +1,24 @@
+### QUESTIONS ###
+
+√ How best to compare competing metrics for a similar ecological variable (e.g., AmbientTemp vs. TempDiff) as predictors in a model set? Include both in the global model?
+
+√ How best to go about fixing convergence warnings. Re-scaling seems to make matters worse.
+
+√ Contrasts on the grouping variable?
+
+Make mention that bout duration doesn't vary over course of incubation period (lm(Mins~NestAge, data = bouts))
+
+Frequency of off-bout initiation as funciton of distance?
+
+HOW to select RE *structures* (not grouping variables, but structures--esp. w.r.t. interactions, etc.)?
+
+### MODEL-FITTING
+
+Setting the 'start' option as the end of the last fit---what if I also change the optimizer?
+
+Ranef-selection model (REML=TRUE) has 'OK' gradient. Switch to ML for fixef selection and gradient spoils.
+Compare the following:
+convCheckR( dur.ranef_topMod )
+convCheckR( dur.fixef_baseMod )
+
+Top random-effects structure includes an interaction (( 1 | fID ) + ( NestAge * TempDiff - 1 | fID )), but that interaction is quick to fall out of the fixed effects during stepwise elimination (second iteration: NestAge:TempDiff p = 0.86895).
