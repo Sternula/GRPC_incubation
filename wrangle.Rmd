@@ -1,0 +1,1468 @@
+---
+title: "GRPC Incubation"
+author: "Ian Hoppe"
+date: "`r format( Sys.Date(), '%B %d, %Y' )`"
+output: 
+  bookdown::html_document2:
+    theme: cosmo
+    highlight: tango
+    number_sections: FALSE
+---
+
+```{r initializR, include = FALSE}
+
+knitr::opts_chunk$set( "echo" = FALSE,
+                       "message" = FALSE,
+                       "warning" = FALSE )
+
+```
+
+```{r pkgR}
+
+library( tidyverse )
+library( lubridate )
+library( SDMTools )
+library( maptools )
+library( mapdata )
+library( leaflet )
+library( raster )
+library( rgeos )
+library( rgdal )
+library( ggmap )
+library( MuMIn )
+library( broom )
+library( maps )
+library( grid )
+library( lme4 )
+library( MASS )
+library( ggsn )
+library( sp )
+
+```
+
+```{r functionR}
+
+# calculates relative humidity (%) from temperature and dew point (in degrees Celsius)
+get.rh <- function( .temp, .td ){
+  rh <- 100 * ( exp( ( 17.625 * .td ) / ( 243.04 + .td ) ) / exp( ( 17.625 * .temp ) / ( 243.04 + .temp ) ) )
+  return( rh )
+}
+
+# calculates saturation vapor pressure (in kPa) from temperature (in degrees Celsius)
+# based on eq. 5.1 in Abtew and Melesse (2013)
+get.es <- function( .temp ){
+  es <- 0.611 * exp( ( 17.27 * .temp ) / ( .temp + 237.3 ) )
+  return( es )
+}
+
+# calculates vapor pressure deficit (in kPa) from temperature (in degrees Celsius) and relative humidity (%)
+# based on eq. 5.3 in Abtew and Melesse (2013)
+get.vpd <- function( .temp, .rh ){
+  es <- get.es( .temp )
+  vpd <- es * ( 1 - ( .rh / 100 ) )
+  return( vpd )
+}
+
+# adapts fortify.sp methods for SpatialLines objects (surely this was an oversight!)
+fortify.SL <- function( model, data, ... ){
+  plyr::ldply( model@lines, fortify )
+}
+
+# ccheck compiles modelwise diagnostics for convergence and failure of merMods.
+ccheck <- function( .mm ){
+  
+  if( is.list( .mm ) ){
+    
+    fail <- sapply( .mm, function( .x ) !is.null( .x@optinfo$conv$lme4$messages ) )
+    relgrad <- sapply( .mm, function( .x ) max( abs( with( .x@optinfo$derivs, solve( Hessian, gradient ) ) ) ) )
+    gfail <- relgrad >= 0.001
+    minT <- sapply( .mm, function( .x ) min( getME( .x, "theta" )[ getME( .x, "lower" ) == 0 ] ) )
+    singular <- minT <= 0.000001
+    
+    results <- data.frame( mod = names( fail ), 
+                           fail = fail, 
+                           relgrad = relgrad, 
+                           gfail = gfail, 
+                           minT = minT, 
+                           singular = singular)
+    
+  }else{
+    
+    fail <- !is.null( .mm@optinfo$conv$lme4$messages )
+    relgrad <- max( abs( with( .mm@optinfo$derivs, solve( Hessian, gradient ) ) ) )
+    gfail <-  relgrad >= 0.001
+    minT <- min( getME( .mm, "theta" )[ getME( .mm, "lower" ) == 0 ] )
+    singular <- minT <= 0.000001
+    
+    results <- data.frame( fail = fail, 
+                           relgrad = relgrad, 
+                           gfail = gfail, 
+                           minT = minT, 
+                           singular = singular )
+    
+  }
+  
+  return( results )
+  
+}
+
+# convCheckR does ccheck better.
+convCheckR <- function( .lmer ){
+  
+  if( is.list( .lmer ) ){
+    
+    nObs <- sapply( .lmer, function( .mm ) getME( .mm, "N" ) )
+    names( nObs ) <- gsub( "\\.N$", "", names( nObs ) )
+    nObs.true <- sapply( .lmer, function( .mm ) nrow( eval( .mm@call$data ) ) )
+    nFE <- sapply( .lmer, function( .mm ) length( getME( .mm, "beta" ) ) )
+    theta <- sapply( .lmer, function( .mm ) getME( .mm, "theta" ) )
+    nRE <- sapply( theta, length )
+    
+    Warn_rescale <- sapply( .lmer, function( .mm ) any( grepl( "rescale", 
+                                                               .mm@optinfo$conv$lme4$messages, 
+                                                               ignore.case = TRUE ) ) )
+    Warn_grad <- sapply( .lmer, function( .mm ) any( grepl( "grad", 
+                                                            .mm@optinfo$conv$lme4$messages, 
+                                                            ignore.case = TRUE ) ) )
+    Warn_unID <- sapply( .lmer, function( .mm ) any( grepl( "unidentifiable", 
+                                                            .mm@optinfo$conv$lme4$messages, 
+                                                            ignore.case = TRUE ) ) )
+    
+    lowerBound <- sapply( .lmer, function( .mm ) getME( .mm, "lower" ) )
+    singular <- map2_lgl( .x = theta, 
+                          .y = lowerBound, 
+                          .f = function( .tt, .ll ) min( .tt[ .ll == 0 ] ) < 1e-5 )
+    
+    derivs <- lapply( .lmer, function( .mm ) .mm@optinfo$derivs )
+    sc.grad <- sapply( derivs, function( .dd ) with( .dd, solve( Hessian, gradient ) ) )
+    max.abs.sc.grad <- sapply( sc.grad, function( .gg ) max( abs( .gg ) ) )
+    large.abs.max.sc.grad <- max.abs.sc.grad > 0.001
+    par.min.grad <- map2_dbl( .x = sc.grad, 
+                              .y = derivs, 
+                              .f = function( .sc, .dd ) max( pmin( abs( .sc ), abs( .dd$gradient ) ) ) )
+    large.par.min.grad <- par.min.grad > 0.001
+    
+    diagnostic <- data.frame( nObs = nObs, 
+                              nObs.true = nObs.true, 
+                              nFE = nFE, 
+                              nRE = nRE, 
+                              singular = singular, 
+                              MaxGrad = max.abs.sc.grad, 
+                              LargeMaxGrad = large.abs.max.sc.grad, 
+                              ParGrad = par.min.grad, 
+                              LargeParGrad = large.par.min.grad, 
+                              WarnGrad = Warn_grad, 
+                              UnID = Warn_unID, 
+                              Rescale = Warn_rescale )
+    
+  }else{
+    
+    nObs <- getME( .lmer, "N" )
+    nObs.true <- nrow( eval( .lmer@call$data ) )
+    nFE <- length( getME( .lmer, "beta" ) )
+    theta <- getME( .lmer, "theta" )
+    nRE <- length( theta )
+    
+    Warn_rescale <- any( grepl( "rescale", 
+                                .lmer@optinfo$conv$lme4$messages, 
+                                ignore.case = TRUE ) )
+    Warn_grad <- any( grepl( "grad", 
+                             .lmer@optinfo$conv$lme4$messages, 
+                             ignore.case = TRUE ) )
+    Warn_unID <- any( grepl( "unidentifiable", 
+                             .lmer@optinfo$conv$lme4$messages, 
+                             ignore.case = TRUE ) )
+    
+    lowerBound <- getME( .lmer, "lower" )
+    singular <- min( theta[ lowerBound == 0 ] ) < 1e-5
+    
+    derivs <- .lmer@optinfo$derivs
+    sc.grad <- with( derivs, solve( Hessian, gradient ) )
+    max.abs.sc.grad <- max( abs( sc.grad ) )
+    large.abs.max.sc.grad <- max.abs.sc.grad > 0.001
+    par.min.grad <- max( pmin( abs( sc.grad ), abs( derivs$gradient ) ) )
+    large.par.min.grad <- par.min.grad > 0.001
+    
+    diagnostic <- data.frame( nObs = nObs, 
+                              nObs.true = nObs.true, 
+                              nFE = nFE, 
+                              nRE = nRE, 
+                              singular = singular, 
+                              MaxGrad = max.abs.sc.grad, 
+                              LargeMaxGrad = large.abs.max.sc.grad, 
+                              ParGrad = par.min.grad, 
+                              LargeParGrad = large.par.min.grad, 
+                              WarnGrad = Warn_grad, 
+                              UnID = Warn_unID, 
+                              Rescale = Warn_rescale )
+    
+  }
+  
+  return( diagnostic )
+  
+}
+
+# fetch.RE returns the random-effects structure(s) from a merMod as a character vector
+fetch.RE <- function( .mm, as.form = FALSE ){
+  .rhs <- as.character( .mm@call$formula[[ 3 ]] )
+  .fe <- .rhs[ 2 ]
+  .re <- stringr::str_extract_all( .fe, "\\(.+?\\)" )[[ 1 ]]
+  .re <- c( .re, .rhs[ 3 ] )
+  if( as.form ) .re <- paste( .re, collapse = " + " )
+  return( .re )
+}
+
+# Calculate standardized [deviance] residuals for objects of class "merMod" produced by lme4::(g)lmer.
+std.resid.glmer <- function( .glmer ){
+  
+  if( !any( c( isLMM( .glmer ), isGLMM( .glmer ) ) ) ){
+    warning( "wrong class" )
+  }else{
+  
+  dev.resid <- residuals( .glmer, type = "deviance" )
+    
+  # Calculate residual mean square of model variance (based on Table 5.5 [p. 68] of Zuur et al. 2007).
+  ms <- sum( dev.resid^2 ) / df.residual( .glmer )
+  
+  # Calculate standardized residuals (based on eqn. of p. 65 in Zuur et al. 2007).
+  std.resid <- dev.resid / sqrt( ms * ( 1 - hatvalues( .glmer ) ) )
+  
+  return( std.resid )
+  
+  }
+  
+}
+
+```
+
+```{r impoRt}
+
+#### Load off-bout files. #####
+
+# Identify all the individual nest files and give them fRiendly names.
+hatchFiles <- sapply( X = list.files( path = "data/bouts/Hatch-Times" ),
+                      FUN = function( .nn ) gsub( pattern = "\\w*\\s*-\\s*(\\w+)\\s*-\\s*(201[0-9]{1})\\.csv",
+                                                  replacement = "hatch_\\1_\\2",
+                                                  x = .nn ) )
+failFiles <- sapply( X = list.files( path = "data/bouts/Fail-Times" ),
+                     FUN = function( .nn ) gsub( pattern = "\\w*\\s*-\\s*(\\w+)\\s*-\\s*(201[0-9]{1})\\.csv",
+                                                 replacement = "fail_\\1_\\2",
+                                                 x = .nn ) )
+
+# Read in the 'hatched' nest files.
+hatches <- list()
+for( i in 1:length( hatchFiles ) ){
+  fl <- paste( "data/bouts/Hatch-Times/", names( hatchFiles[ i ] ), sep = "" )
+  hatches[[ hatchFiles[[ i ]] ]] <- read.csv( fl, na.strings = "", stringsAsFactors = FALSE )
+  names( hatches[[ hatchFiles[[ i ]] ]] ) <- gsub( pattern = "(\\w*)\\.(\\w*)[\\.s?\\.]*",
+                                                   replacement = "\\1\\2",
+                                                   x = names( hatches[[ hatchFiles[[ i ]] ]] ) )
+  hatches[[ hatchFiles[[ i ]] ]]$fate_id_year <- hatchFiles[[ i ]]
+}
+
+# Read in the 'failed' nest files.
+fails <- list()
+for( i in 1:length( failFiles ) ){
+  fl <- paste( "data/bouts/Fail-Times/", names( failFiles[ i ] ), sep = "" )
+  fails[[ failFiles[[ i ]] ]] <- read.csv( fl, na.strings = "", stringsAsFactors = FALSE )
+  names( fails[[ failFiles[[ i ]] ]] ) <- gsub( pattern = "(\\w*)\\.(\\w*)[\\.s?\\.]*",
+                                                replacement = "\\1\\2",
+                                                x = names( fails[[ failFiles[[ i ]] ]] ) )
+  fails[[ failFiles[[ i ]] ]]$fate_id_year <- failFiles[[ i ]]
+}
+
+##### Initial processing of off-bout data. #####
+
+# Make a master by-event data.frame. Remove 'warming' observations, focusing just on off-bouts.
+bouts <- do.call( what = "rbind",
+                  args = c( hatches, fails ) ) %>%
+  separate( fate_id_year, c( "fate", "id", "year" ), sep = "_" ) %>%
+  filter( Event == "Off-bout" ) %>%
+  dplyr::select( -Event )
+
+# Try to make things lubridate-fRiendly.
+bouts$EventStart <- with( bouts, mdy_hm( paste( Date, EventStart ), tz = "America/Chicago" ) )
+
+#### <DECISION> ####
+# Accept the EventStart as the time of incubation initiation, but use 'Secs' as duration. Refresh EventEnd accordingly. (Second option goes with original EventEnd.)
+# Range of differences between values (Secs - (EventEnd-EventStart)): -14494 s -- 850 s
+bouts$EventEnd <- with( bouts, EventStart + duration( Secs, "seconds" ) )
+# bouts$EventEnd <- with( bouts, mdy_hm( paste( Date, EventEnd ), tz = "America/Chicago" ) )
+#### </DECISION> ####
+
+bouts$Date <- with( bouts, mdy( Date, tz = "America/Chicago" ) )
+bouts$EventDuration <- with( bouts, dseconds( EventStart %--% EventEnd ) )
+
+# ## Negative durations actually occured over midnight. Correct the date and recalculate the duration.
+# ## This bit became unnecessary when using the measured ('Secs') durations.
+# inds <- which( bouts$EventDuration < as.duration( 0 ) )
+# bouts$EventEnd[ inds ] <- bouts$EventEnd[ inds ] + days( 1 )
+# bouts$EventDuration[ inds ] <- with( bouts, dseconds( EventStart[ inds ] %--% EventEnd[ inds ] ) )
+#
+# ## Do you have the same time that I have?
+#
+# # 200 observations differ by ± 1s, for a total of 12s (R calc. 12s > Excel calc.)
+# bouts$secTest <- with( bouts, EndTime - BeginTime )
+# bouts$secDiff <- with( bouts, secTest - Secs )
+# length( bouts$secDiff[ which( bouts$secDiff != 0 ) ] ) # 200
+# range( bouts$secDiff[ which( bouts$secDiff != 0 ) ] ) # -1 1
+# sum( bouts$secDiff[ which( bouts$secDiff != 0 ) ] ) # 12
+#
+# # 910 observations differ by ± 0.6s, for a total of 2.8s (R calc. 12s > Excel calc.)
+# bouts$minTest <- with( bouts, Secs / 60 )
+# bouts$minDiff <- with( bouts, minTest - Mins )
+# length( bouts$minDiff[ which( bouts$minDiff != 0 ) ] ) # 910
+# range( bouts$minDiff[ which( bouts$minDiff != 0 ) ] ) * 60 # -0.6 0.6
+# sum( bouts$minDiff[ which( bouts$minDiff != 0 ) ] ) * 60 # 2.8
+#
+# # 1543 observations differ by ± 18s, for a total of 626s (R calc. 626s < Excel calc.)
+# bouts$hrTest <- with( bouts, Secs / 3600 )
+# bouts$hrDiff <- with( bouts, hrTest - Hrs )
+# length( bouts$hrDiff[ which( bouts$hrDiff != 0 ) ] ) # 1543
+# range( bouts$hrDiff[ which( bouts$hrDiff != 0 ) ] ) * 3600 # -18 18
+# sum( bouts$hrDiff[ which( bouts$hrDiff != 0 ) ] ) * 3600 # -626
+
+# Remove those likely to be erroneously identified (i.e., those ≤ 10 minutes in duration [n = 13]).
+bouts <- bouts %>%
+  filter( EventDuration > duration( 10, "minutes" ) )
+
+##### Construction of derived data.frames. #####
+
+# Make a by-nest*day data.frame.
+dayBouts <- bouts %>%
+  group_by( id, Date ) %>%
+  summarize( Secs = sum( Secs ),
+             Mins = sum( Mins ),
+             Hrs = sum( Hrs ),
+             Bouts = n(),
+             fate = unique( fate ) )
+
+# Make a by-nest data.frame.
+nests <- bouts %>%
+  group_by( id ) %>%
+  summarize( Mins = sum( Mins ),
+             Bouts =  n(),
+             MeanBouts = n() / length( unique( Date ) ),
+             MeanMins_day = sum( Mins ) / length( unique( Date ) ), 
+             MeanMins_bout = sum( Mins ) / Bouts, 
+             startDate = min( Date ),
+             finDate = max( Date ),
+             fate = unique( fate ) )
+
+##### Reading-in of ancillary data. #####
+
+# Add geographic information to nest data. Create a categorical variable indicating whether or not a turbine exists within 1km of the nest.
+nestPos <- read.csv( "data/NestDistance.csv", stringsAsFactors = FALSE )
+nests <- inner_join( nestPos, nests, by = c( "Nest" = "id" ) ) %>% 
+  mutate( Turbine_within_1km = Turbine_Distance_m <= 1000 )
+
+# Add vegetation information to nest data.
+nestVeg <- read.csv( "data/NestVeg.csv", na.strings = "N/A", stringsAsFactors = FALSE ) %>% 
+  mutate( EcologicalSite = gsub( pattern = "\\s", replacement = "", x = EcologicalSite ) )
+nests <- inner_join( nestVeg, nests, by = c( "NestID" = "Nest" ) ) %>%
+  rename( measDate = Date ) %>%
+  mutate( measDate = mdy( measDate, tz = "America/Chicago" ) ) %>% 
+  dplyr::select( c( 1:5, 12, 54, 60:75 ) )
+
+vegKey <- data.frame( Term = c( "VOR", "VH", "LD", "PIE", "CS", "FORB", "SHR", "ANN", "CACT", "BG", "LIT", "SD", "PB", "WSB", "WSR", "WS" ),
+                      Definition = c( "Visual obstruction reading",
+                                      "Live vegetation height",
+                                      "Litter depth",
+                                      "Cow-pie",
+                                      "Cool-season grasses",
+                                      "Forbs",
+                                      "Shrubs",
+                                      "Annuals",
+                                      "Cacti",
+                                      "Bare ground",
+                                      "Litter",
+                                      "Standing dead vegetation",
+                                      "Plant base",
+                                      "Warm-season bunch grasses",
+                                      "Warm-season rhizomatous grasses",
+                                      "All warm-season grasses" ),
+                      Unit = c( "dm", "cm", "cm", rep( "%", 13 ) ) )
+
+# Add iButton and nest-fate information to the nest data. Calculate date of incubation initiation, if known (hatched nests).
+nestFate <- read.csv( file = "data/NestFate.csv", na.strings = "N/A", stringsAsFactors = FALSE ) %>%
+  mutate( Date_Nest_Found = mdy( Date_Nest_Found, tz = "America/Chicago" ),
+          Date_iButton_Start = mdy( Date_iButton_Start, tz = "America/Chicago" ),
+          Date_iButton_End = mdy( Date_iButton_End, tz = "America/Chicago" ),
+          Date_Nest_End = mdy( Date_Nest_End, tz = "America/Chicago" ),
+          NestFate_Uncertain = grepl( "\\?", paste( Nest_Success, Nest_Predated, Nest_Abandoned ) ),
+          Nest_Success = ifelse( grepl( "Y", Nest_Success, ignore.case = TRUE ), 1, 0 ),
+          Nest_Predated = ifelse( grepl( "Y", Nest_Predated, ignore.case = TRUE ), "Yes", ifelse( grepl( "N", Nest_Predated, ignore.case = TRUE ), "No" , "Unk" ) ),
+          Nest_Abandoned = ifelse( grepl( "Y", Nest_Abandoned, ignore.case = TRUE ), "Yes", ifelse( grepl( "N", Nest_Abandoned, ignore.case = TRUE ), "No", "Unk" ) ) )
+nests <- inner_join( nests, nestFate, by = c( "NestID", "UTM_E", "UTM_N", "measDate" = "Date_iButton_Start" ) ) %>%
+  mutate( Date_Incubation_Initiated = Date_Nest_End - duration( 27, "days" ) )
+
+# On one occasion (nest #1163A) an off-bout was recorded more than 28 days prior to the estimated hatching date. In that case, set the date of estimated incubation initiation back to the date of the earliest recorded off-bout for that nest.
+nests$Date_Incubation_Initiated[ which( nests$Date_Incubation_Initiated > nests$startDate ) ] <- nests$startDate[ which( nests$Date_Incubation_Initiated > nests$startDate ) ]
+
+# Also, the date of incubation initiation is not known for un-hatched nests.
+nests$Date_Incubation_Initiated[ which( nests$Nest_Success != 1 ) ] <- NA
+
+##### Nest-age calculations. #####
+
+# Calculate nest age for each day of off-bout data for each nest, if available.
+dayBouts$NestAge <- NA
+for( i in 1:nrow( dayBouts ) ){
+  nestId <- dayBouts$id[ i ]
+  initDate <- with( nests, Date_Incubation_Initiated[ which( NestID == nestId ) ] )
+  dayBouts$NestAge[ i ] <- with( dayBouts, as.numeric( Date[ i ] - initDate ) )
+}
+
+# Calculate nest age for each off-bout, if available.
+bouts$NestAge <- NA
+for( j in 1:nrow( bouts ) ){
+  nestId <- bouts$id[ j ]
+  initDate <- with( nests, Date_Incubation_Initiated[ which( NestID == nestId ) ] )
+  bouts$NestAge[ j ] <- with( bouts, as.numeric( Date[ j ] - initDate ) )
+}
+
+##### Load iButton temperature data. #####
+
+if( !exists( "iTemps" ) ){
+  
+  if( length( fl <- list.files( pattern = "iTemps.RData", recursive = TRUE ) ) > 0 ){
+    load( fl )
+  } else {
+    
+    # Read in iButton temperature data.
+    iTemps <- read.csv( "data/iButton/Ainsworth_iButtonMaster.csv", stringsAsFactors = FALSE ) %>%
+      mutate( DateTime = mdy_hms( DateTime, tz = "America/Chicago" ) )
+    
+    # Create a new column that will hold the incubation interval.
+    iTemps$NestInterval <- ymd_hms( "1900-01-01 00:00:00", tz = "America/Chicago" ) %--% ymd_hms( "1900-01-01 00:00:01", tz = "America/Chicago" )
+    for( nID in unique( iTemps$NestID ) ){
+      nestInt <- with( filter( nests, NestID == nID ), measDate %--% Date_Nest_End )
+      iTemps$NestInterval[ iTemps$NestID == nID ] <- nestInt
+    }
+    
+    # Filter out temperature observations made outside the incubation window.
+    iTemps <- iTemps %>%
+      filter( DateTime %within% NestInterval )
+    
+    # Create a nest-by-nest list of data.frames specifying the off-bout intervals. Split it into a by-nest list of data.frames.
+    offBouts <- bouts %>%
+      mutate( offTimes = EventStart %--% EventEnd,
+              boutNum = paste( id, seq_along( id ), sep = "_" ) ) %>%
+      dplyr::select( id, boutNum, offTimes )
+    offBouts <- split( x = offBouts,
+                       f = offBouts$id )
+    
+    # Create a new column in the iTemp data.frame indicating whether or not the hen was on the nest at the time the measurement was made.
+    iTemps$onNest <- NA
+    for( o in 1:nrow( iTemps ) ){
+      tempObs <- iTemps[ o, ]
+      iTemps$onNest[ o ] <- !any( iTemps$DateTime[ o ] %within% offBouts[[ iTemps$NestID[ o ] ]]$offTimes )
+      
+    }
+    save( iTemps, file = "data/iTemps.RData" )
+  }
+  
+}
+
+##### More ancillary data! #####
+
+# Read in weather data.
+weather <- read.csv( "data/AinsworthAmbientALL.csv", na.strings = " ", stringsAsFactors = FALSE ) %>%
+  mutate( Date = mdy( Date, tz = "America/Chicago" ),
+          Time = mdy_hm( paste( "01-01-2014", Time ), tz = "America/Chicago" ),
+          DateTime = mdy_hm( DateTime, tz = "America/Chicago" ),
+          DryBulbCelsius = as.numeric( DryBulbCelsius ), 
+          DewPointCelsius = as.numeric( DewPointCelsius ), 
+          RelativeHumidity = get.rh( DryBulbCelsius, DewPointCelsius ), 
+          VPD = get.vpd( DryBulbCelsius, RelativeHumidity ) ) %>%
+  arrange( DateTime )
+
+# Using linear interpolation, estimate the approximate ambient temperature and vapor pressure deficit at the moment of off-bout initiation.
+bouts$AmbientTemp <- NA
+bouts$preBoutNestTemp <- NA
+bouts$VPD <- NA
+for( b in 1:nrow( bouts ) ){
+  
+  # Extract the start time of the off-bout.
+  boutStart <- bouts$EventStart[ b ]
+  
+  # Isolate the weather data from the same year and pull out the two weather records closest in time to the start of the off-bout.
+  boutWeather <- weather %>% 
+    dplyr::select( DateTime, DryBulbCelsius, VPD ) %>% 
+    filter( year( DateTime ) == year( boutStart ) ) %>%
+    arrange( abs( DateTime - boutStart ) )
+  boutWeather <- boutWeather[ 1:2, ]
+  
+  # Interpolate the ambient temperature and VPD based on the two nearest weather records. If the two nearest records are to one side (temporally) of the off-bout initiation time, the ambient temperature and VPD are taken to be the recorded temperature and calculated VPD at the time nearest the start time (rule=2).
+  bouts$AmbientTemp[ b ] <- approx( x = boutWeather$DateTime,
+                                    y = boutWeather$DryBulbCelsius,
+                                    xout = boutStart, 
+                                    rule = 2 )$y
+  
+  bouts$VPD[ b ] <- approx( x = boutWeather$DateTime, 
+                            y = boutWeather$VPD, 
+                            xout = boutStart, 
+                            rule = 2 )$y
+  
+  # Isolate nest temperature data from the nest on the day of the off-bout.
+  nestWeather <- iTemps %>% 
+    dplyr::select( DateTime, Temperature, NestID ) %>% 
+    filter( NestID == bouts$id[ b ], 
+            year( DateTime ) == year( boutStart ), 
+            yday( DateTime ) == yday( boutStart ), 
+            DateTime < boutStart ) %>% 
+    arrange( boutStart - DateTime )
+  
+  # Take the pre-off-bout nest temperature to be the last recorded temperature before the start of the off-bout.
+  bouts$preBoutNestTemp[ b ] <- nestWeather$Temperature[ 1 ]
+  
+}
+
+# Calculate the signed difference between the pre-off-bout nest temperature and the ambient temperature at the time of off-bout initiation.
+bouts$TempDiff <- with( bouts, preBoutNestTemp - AmbientTemp )
+
+##### Master data.frame. #####
+
+# Make a data.frame containing both nest-specific and event-specific information. Nest-specific data are repeated!!!
+fullBouts <- left_join( x = bouts, 
+                        y = nests, 
+                        by = c( "id" = "NestID", "fate" = "fate" ) ) %>% 
+  rename( Mins = Mins.x, 
+          TotalMinsOff = Mins.y ) %>% 
+  mutate( fID = factor( id ), 
+          Jday = yday( EventStart ), 
+          EventStart_dl = EventStart, 
+          fYear = factor( year ) )
+
+# Adding dateless columns for the time data should make things simpler (I hope).
+year( fullBouts$EventStart_dl ) <- 2014
+yday( fullBouts$EventStart_dl ) <- 1
+
+```
+
+```{r astRonomy}
+
+# Read in 2013 sunrise/sunset times for Ainsworth (from USNO, Astronomical Applications Department, Washington, D.C., USA; accessed 20 Dec 2016)
+sun2013 <- read.table( file = "data/astronomy/sun2013.txt", header = TRUE, sep = "" ) %>%
+  gather( key = Month_Sun,
+          value = Time,
+          -Dy, na.rm = TRUE ) %>%
+  separate( col = Month_Sun,
+            into = c( "Month", "Sun" ),
+            sep = "_" ) %>%
+  spread( key = Sun,
+          value = Time )
+
+# Read in 2013 civil twilight times for Ainsworth (from USNO, Astronomical Applications Department, Washington, D.C., USA; accessed 20 Dec 2016)
+twi2013 <- read.table( file = "data/astronomy/twilight2013.txt", header = TRUE, sep = "" ) %>%
+  gather( key = Month_Sun,
+          value = Time,
+          -Dy, na.rm = TRUE ) %>%
+  separate( col = Month_Sun,
+            into = c( "Month", "Sun" ),
+            sep = "_" ) %>%
+  spread( key = Sun,
+          value = Time )
+
+# Combine 2013 astronomical data.
+sun2013 <- inner_join( x = sun2013,
+                       y = twi2013,
+                       by = c( "Month", "Dy" ) )
+sun2013$Year <- 2013
+sun2013 <- sun2013[ , c( 7, 2, 1, 3:6 ) ]
+names( sun2013 )[ 3:7 ] <- c( "Day", "Sunrise", "Sunset", "TwilightBegin", "TwilightEnd" )
+
+# Read in 2014 sunrise/sunset times for Ainsworth (from USNO, Astronomical Applications Department, Washington, D.C., USA; accessed 20 Dec 2016)
+sun2014 <- read.table( file = "data/astronomy/sun2014.txt", header = TRUE, sep = "" ) %>%
+  gather( key = Month_Sun,
+          value = Time,
+          -Dy, na.rm = TRUE ) %>%
+  separate( col = Month_Sun,
+            into = c( "Month", "Sun" ),
+            sep = "_" ) %>%
+  spread( key = Sun,
+          value = Time )
+
+# Read in 2014 civil twilight times for Ainsworth (from USNO, Astronomical Applications Department, Washington, D.C., USA; accessed 20 Dec 2016)
+twi2014 <- read.table( file = "data/astronomy/twilight2014.txt", header = TRUE, sep = "" ) %>%
+  gather( key = Month_Sun,
+          value = Time,
+          -Dy, na.rm = TRUE ) %>%
+  separate( col = Month_Sun,
+            into = c( "Month", "Sun" ),
+            sep = "_" ) %>%
+  spread( key = Sun,
+          value = Time )
+
+# Combine 2014 astronomical data.
+sun2014 <- inner_join( x = sun2014,
+                       y = twi2014,
+                       by = c( "Month", "Dy" ) )
+sun2014$Year <- 2014
+sun2014 <- sun2014[ , c( 7, 2, 1, 3:6 ) ]
+names( sun2014 )[ 3:7 ] <- c( "Day", "Sunrise", "Sunset", "TwilightBegin", "TwilightEnd" )
+
+# Compile all (2013+2014) astronomical data.
+sun <- bind_rows( sun2013, sun2014 )
+sun$Month <- as.integer( gsub( "X", "", sun$Month ) )
+sun$Sunrise <- gsub( pattern = "([1-9]{1})([0-9]{2})",
+                     replacement = "\\1:\\2",
+                     x = sun$Sunrise )
+sun$Sunset <- gsub( pattern = "([0-9]{2})([0-9]{2})",
+                    replacement = "\\1:\\2",
+                    x = sun$Sunset )
+sun$TwilightBegin <- gsub( pattern = "([1-9]{1})([0-9]{2})",
+                           replacement = "\\1:\\2",
+                           x = sun$TwilightBegin )
+sun$TwilightEnd <- gsub( pattern = "([0-9]{2})([0-9]{2})",
+                         replacement = "\\1:\\2",
+                         x = sun$TwilightEnd )
+
+# Teach R to recognize the dates and times.
+sun$Date <- with( sun, ymd( paste( Year, Month, Day, sep = "-" ), tz = "America/Chicago" ) )
+sun <- sun[ order( year( sun$Date ), yday( sun$Date ) ), c( 8, 4:7 ) ]
+row.names( sun ) <- NULL
+
+sun$Sunrise <- with( sun, ymd_hm( paste( ymd( Date ), Sunrise, sep = " " ), tz = "America/Chicago" ) )
+sun$Sunset <- with( sun, ymd_hm( paste( ymd( Date ), Sunset, sep = " " ), tz = "America/Chicago" ) )
+sun$TwilightBegin <- with( sun, ymd_hm( paste( ymd( Date ), sun$TwilightBegin, sep = " " ), tz = "America/Chicago" ) )
+sun$TwilightEnd <- with( sun, ymd_hm( paste( ymd( Date ), TwilightEnd, sep = " " ), tz = "America/Chicago" ) )
+
+# Make correction for Daylight Saving Time (not done in the original USNO data.)
+dstInts <- data.frame( dst2013 = ymd( "2013-03-10", tz = "America/Chicago" ) %--% ymd( "2013-11-03", tz = "America/Chicago" ),
+                       dst2014 = ymd( "2014-03-09", tz = "America/Chicago" ) %--% ymd( "2014-11-02", tz = "America/Chicago" ) )
+sun$DSTcorrection <- with( sun,
+                           ifelse( Date %within% dstInts$dst2013 | Date %within% dstInts$dst2014, 1, 0 ) )
+sun$DSTcorrection <- hours( sun$DSTcorrection )
+
+sun$Sunrise <- sun$Sunrise + sun$DSTcorrection
+sun$Sunset <- sun$Sunset + sun$DSTcorrection
+sun$TwilightBegin <- sun$TwilightBegin + sun$DSTcorrection
+sun$TwilightEnd <- sun$TwilightEnd + sun$DSTcorrection
+
+sun <- dplyr::select( sun, -DSTcorrection )
+
+# Set all time columns to same date for ease of handling.
+year( sun$Sunrise ) <- 2014
+year( sun$Sunset ) <- 2014
+year( sun$TwilightBegin ) <- 2014
+year( sun$TwilightEnd ) <- 2014
+yday( sun$Sunrise ) <- 1
+yday( sun$Sunset ) <- 1
+yday( sun$TwilightBegin ) <- 1
+yday( sun$TwilightEnd ) <- 1
+
+# Make a list of all the unique dates on which off-bouts occurred.
+dates2013 <- unique( bouts$Date )[ which( year( unique( bouts$Date ) ) == 2013 ) ]
+dates2014 <- unique( bouts$Date )[ which( year( unique( bouts$Date ) ) == 2014 ) ]
+
+# Calculate the overall (2013 & 2014) mean sunrise/sunset and twilight beginning and ending times across all dates on which off-bouts occurred. Mirror the twilight times around the sunrise/sunset.
+astro <- sun %>%
+  filter( Date %in% c( dates2013, dates2014 ) ) %>%
+  summarize( Sunrise = mean( Sunrise ),
+             Sunset = mean( Sunset ),
+             TwilightBegin = mean( TwilightBegin ),
+             TwilightEnd = mean( TwilightEnd ) ) %>%
+  rename( DawnBegin = TwilightBegin,
+          DuskEnd = TwilightEnd ) %>%
+  mutate( DawnEnd = Sunrise + ( Sunrise - DawnBegin ),
+          DuskBegin = Sunset - ( DuskEnd - Sunset ) ) %>%
+  dplyr::select( 3, 1, 5:6, 2, 4 )
+
+# Interestingly, the attributes (class and tzone) become mixed up during the final mutate. This led to problems in the creation of twiPoly.
+attributes( astro$DawnEnd ) <- attributes( astro$DawnBegin )
+attributes( astro$DuskBegin ) <- attributes( astro$DuskEnd )
+
+# Construct a data.frame with vertices for a polygon to denote twilight times in a freq(bout.initiation) ~ time.of.day histogram.
+dawnPoly <- astro %>%
+  dplyr::select( contains( "Dawn" ) ) %>%
+  gather( key = Event,
+          value = Time,
+          everything() )
+dawnPoly <- dawnPoly %>%
+  bind_rows( dawnPoly[ 2:1, ] ) %>%
+  bind_cols( data.frame( Y = c( 0, 0, Inf, Inf ) ) ) %>%
+  mutate( Event = "Dawn" )
+
+duskPoly <- astro %>%
+  dplyr::select( contains( "Dusk" ) ) %>%
+  gather( key = Event,
+          value = Time,
+          everything() )
+duskPoly <- duskPoly %>%
+  bind_rows( duskPoly[ c( 2, 1 ), ] ) %>%
+  bind_cols( data.frame( Y = c( 0, 0, Inf, Inf ) ) ) %>%
+  mutate( Event = "Dusk" )
+
+twiPoly <- bind_rows( dawnPoly, duskPoly )
+
+# xintercepts for the sunrise/sunset lines of the same histogram.
+sunLine <- astro %>%
+  dplyr::select( contains( "Sun" ) ) %>%
+  gather( key = Event,
+          value = Time,
+          everything() )
+
+```
+
+```{r weatheR}
+
+# Join weather and astronomical data, make indicator variables denoting whether weather recordings are made during daylight and twilight hours.
+weatherSun <- weather %>%
+  filter( Date %in% c( dates2013, dates2014 ) ) %>%
+  inner_join( sun, by = "Date" ) %>%
+  group_by( Date ) %>%
+  mutate( Daylight = Time %within% ( Sunrise %--% Sunset ),
+          Twilight = Time %within% ( TwilightBegin %--% TwilightEnd ) )
+
+# Summarize temperature by month.
+monthTemps <- weatherSun %>%
+  ungroup() %>%
+  group_by( Month, Day ) %>%
+  summarize( HighTemp = max( DryBulbCelsius, na.rm = TRUE ),
+             LowTemp = min( DryBulbCelsius, na.rm = TRUE ) ) %>%
+  ungroup() %>%
+  group_by( Month ) %>%
+  summarize( Avg_HighTemp = mean( HighTemp ),
+             Low_HighTemp = min( HighTemp ),
+             High_HighTemp = max( HighTemp ),
+             Avg_LowTemp = mean( LowTemp ),
+             Low_LowTemp = min( LowTemp ),
+             High_LowTemp = max( LowTemp ) )
+
+```
+
+```{r sandbox}
+
+boutsT <- bouts
+year( boutsT$EventStart ) <- 2014
+yday( boutsT$EventStart ) <- 1
+
+ggplot( data = filter( boutsT, Event == "Off-bout" ), 
+        aes( x = EventStart ) ) + 
+  geom_polygon( data = twiPoly, 
+                inherit.aes = FALSE, 
+                aes( x = Time, 
+                     y = Y, 
+                     group = Event ), 
+                alpha = 0.5 ) + 
+  geom_segment( data = sunLine, 
+                inherit.aes = FALSE, 
+                aes( x = Time, 
+                     xend = Time, 
+                     y = 0, 
+                     yend = Inf, 
+                     group = Event ) ) + 
+  geom_histogram( bins = 96, 
+                  colour = "white", 
+                  fill = "black" ) + 
+  scale_x_datetime( date_breaks = "60 min",
+                    date_labels = "%H:%M" ) + 
+  theme_classic() + 
+  theme( axis.text.x = element_text( angle = 45, 
+                                     hjust = 1 ) ) + 
+  labs( x = "Time", 
+        y = "Frequency" )
+
+```
+
+```{r mapR}
+
+# Define the target projection.
+targProj <- "+init=epsg:4326 +proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+
+# Create a SpatialPointsDataFrame with the nest data.
+nestLocs <- nests[ , c( "UTM_E", "UTM_N" ) ]
+nestsSPDF <- spTransform( SpatialPointsDataFrame( coords = nestLocs,
+                                                  data = nests,
+                                                  proj4string = CRS( "+init=epsg:32610 +proj=utm +zone=14 +datumWGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0") ), 
+                          targProj )
+
+### Read in the landscape shapefiles.
+# Turbines
+turbines.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
+                                      layer = "wind_turbines" ), 
+                             targProj )
+# Water
+water.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
+                                  layer = "Water" ), 
+                         targProj )
+# Major roads
+roads_major.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
+                                         layer = "major_rds" ), 
+                                targProj )
+# Roads
+roads_minor.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
+                                         layer = "Roads" ), 
+                                targProj )
+# Trees
+trees.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
+                                   layer = "Trees" ), 
+                          targProj )
+
+# Grab map data for country, state, and county maps.
+usa <- map_data( "state" )
+USbox <- with( usa, 
+               data.frame( xmin = floor( min( long ) ), 
+                           xmax = ceiling( max( long ) ), 
+                           ymin = floor( min( lat ) ), 
+                           ymax = ceiling( max( lat ) ) ) )
+
+nebraska <- map_data( "county", "nebraska" )
+NE_poly <- SpatialPolygons( Srl = list( NE_outline = Polygons( srl = list( Polygon( coords = filter( usa, region == "nebraska" )[ , c( "long", "lat" ) ], 
+                                                                                    hole = FALSE ) ), 
+                                                               ID = "NE_outline" ) ), 
+                            proj4string = CRS( targProj ) )
+
+brownCo <- nebraska %>%
+  filter( subregion == "brown" )
+brown_poly <- SpatialPolygons( Srl = list( brown_outline = Polygons( srl = list( Polygon( coords = brownCo[ , c( "long", "lat" ) ], 
+                                                                                          hole = FALSE ) ), 
+                                                                     ID = "brown_outline" ) ), 
+                               proj4string = CRS( targProj ) )
+
+# Import the GRPC range .dbf (cropped and converted to a shapefile in ArcGIS on a separate machine by WJH) (original from USGS Gap Analysis Program).
+GRPC_range <- spTransform( readOGR( dsn = "data/distribution/GRPC_range/GPC_Range_NE", 
+                                    layer = "GPC_Range_NE" ), 
+                           targProj )
+
+# Prepare the range and landscape data for plotting with ggplot2 and find the intersection between each layer and the relevant spatial extent.
+GRPC_range.dfc <- fortify( gIntersection( spgeom1 = GRPC_range, spgeom2 = NE_poly ) )
+water.shp@data$id <- rownames( water.shp@data )
+water.dfc <- fortify( gIntersection( spgeom1 = water.shp, spgeom2 = brown_poly ) )
+water.dfcsa <- fortify( crop( x = water.shp, y = nestsSPDF ), region = "id" )
+trees.shp@data$id <- rownames( trees.shp@data )
+trees.dfc <- fortify( gIntersection( spgeom1 = trees.shp, spgeom2 = brown_poly ) )
+trees.dfcsa <- fortify( crop( x = trees.shp, y = nestsSPDF ), region = "id" )
+roads_major.shp@data$id <- rownames( roads_major.shp@data )
+roads_major.dfc <- fortify.SL( gIntersection( spgeom1 = roads_major.shp, spgeom2 = brown_poly ) )
+roads_major.dfcsa <- fortify.SL( crop( x = roads_major.shp, y = nestsSPDF ) )
+roads_minor.shp@data$id <- rownames( roads_minor.shp@data )
+roads_minor.dfc <- fortify.SL( gIntersection( spgeom1 = roads_minor.shp, spgeom2 = brown_poly ) )
+roads_minor.dfcsa <- fortify.SL( crop( x = roads_major.shp, y = nestsSPDF ) )
+
+USmap <- ggplot( data = usa, 
+                 aes( x = long, 
+                      y = lat, 
+                      group = group ) ) + 
+  geom_rect( data = USbox, 
+             inherit.aes = FALSE, 
+             aes( xmin = xmin - ( 0.05 * ( xmax - xmin ) ), 
+                  xmax = xmax + ( 0.05 * ( xmax - xmin ) ), 
+                  ymin = ymin - ( 0.05 * ( ymax - ymin ) ), 
+                  ymax = ymax + ( 0.05 * ( ymax - ymin ) ) ), 
+             alpha = 0, 
+             colour = "black" ) + 
+  geom_polygon( fill = alpha( "ivory", 0.5 ), 
+                colour = "black" ) + 
+  geom_polygon( data = filter( usa, region == "nebraska" ) ) + 
+  coord_fixed( ratio = 1.4 ) + 
+  theme_classic() + 
+  theme( line = element_blank(), 
+         text = element_blank() ) + 
+  scalebar( data = usa, 
+            location = "bottomleft", 
+            st.size = 3, 
+            dist = 500, 
+            dd2km = TRUE, 
+            model = "WGS84" )
+
+NEmap <- ggplot( data = nebraska,
+                 aes( x = long,
+                      y = lat,
+                      group = group ) ) +
+  geom_polygon( fill = alpha( "ivory", 0.5 ),
+                colour = "black" ) + 
+  geom_polygon( data = GRPC_range.dfc, 
+                aes( group = group ), 
+                alpha = 0.6 ) + 
+  geom_polygon( data = filter( nebraska, subregion == "brown" ) ) + 
+  coord_fixed( ratio = 1.3 ) +
+  theme_classic() +
+  theme( line = element_blank(),
+         text = element_blank(),
+         plot.background = element_rect( fill = "transparent",
+                                         colour = "transparent" ),
+         panel.background = element_rect( fill = "transparent",
+                                          colour = "transparent" ) ) + 
+  scalebar( data = nebraska, 
+            dist = 50, 
+            st.dist = 0.04, 
+            dd2km = TRUE, 
+            model = "WGS84", 
+            anchor = c( x = -102.6, y = 40.85 ), 
+            st.size = 3 ) + 
+  north( data = nebraska, 
+         location = "bottomleft", 
+         scale = 0.2, 
+         symbol = 3 )
+
+brownMap <- ggplot( data = brownCo,
+                    aes( x = long,
+                         y = lat,
+                         group = group ) ) +
+  geom_polygon( fill = alpha( "ivory", 0.5 ),
+                colour = "black" ) + 
+  geom_polygon( data = water.dfc, 
+                colour = "midnightblue", 
+                fill = "midnightblue" ) + 
+  geom_polygon( data = trees.dfc,
+                colour = "forestgreen",
+                fill = "forestgreen" ) + 
+  geom_path( data = roads_major.dfc, 
+             colour = "grey" ) + 
+  geom_path( data = roads_minor.dfc, 
+             colour = "grey" ) + 
+  geom_point( data = data.frame( turbines.shp@coords ), 
+              inherit.aes = FALSE, 
+              aes( x = coords.x1, 
+                   y = coords.x2 ), 
+              shape = 8 ) + 
+  geom_point( data = data.frame( nestsSPDF@coords ),
+              inherit.aes = FALSE,
+              aes( x = UTM_E,
+                   y = UTM_N ), 
+              colour = "firebrick1" ) + 
+  coord_fixed( ratio = 1.3 ) +
+  theme_classic() +
+  theme( line = element_blank(),
+         text = element_blank(),
+         plot.background = element_rect( fill = "transparent",
+                                         colour = "transparent" ),
+         panel.background = element_rect( fill = "transparent",
+                                          colour = "transparent" ) ) + 
+  scalebar( data = brownCo, 
+            dist = 5, 
+            dd2km = TRUE, 
+            model = "WGS84", 
+            height = 0.01, 
+            anchor = c( x = -100, y = 42.07 ), 
+            st.size = 3 ) + 
+  north( data = brownCo, 
+         location = "topright", 
+         symbol = 3 )
+
+SAmap <- ggplot( data = water.dfcsa, 
+                 aes( x = long, 
+                      y = lat, 
+                      group = group ) ) + 
+  geom_polygon( colour = "midnightblue", 
+                fill = "midnightblue" ) + 
+  geom_polygon( data = trees.dfcsa, 
+                colour = "forestgreen", 
+                fill = "forestgreen" ) + 
+  geom_path( data = roads_major.dfcsa, 
+             colour = "grey" ) + 
+  geom_path( data = roads_minor.dfcsa, 
+             colour = "grey" ) + 
+  geom_point( data = data.frame( turbines.shp@coords ), 
+              inherit.aes = FALSE, 
+              aes( x = coords.x1, 
+                   y = coords.x2 ), 
+              shape = 8 ) + 
+  geom_point( data = data.frame( nestsSPDF@coords ), 
+              inherit.aes = FALSE, 
+              aes( x = UTM_E, 
+                   y = UTM_N ), 
+              colour = "firebrick1" ) + 
+  coord_fixed( ratio = 1.3 ) + 
+  theme_classic() + 
+  theme( line = element_blank(), 
+         text = element_blank() )
+
+# hatchPal <- colorFactor( palette = c( "mediumseagreen", "tomato" ), domain = c( "hatch", "fail" ), ordered = TRUE )
+# 
+# leaflet( nestsSPDF ) %>% 
+#   addTiles() %>% 
+#   addCircleMarkers( stroke = FALSE, 
+#                     color = ~hatchPal( fate ), 
+#                     fillOpacity = 0.75, 
+#                     popup = ~htmlEscape( Nest ) )
+
+```
+
+```{r triMapFiguRe}
+
+grid.newpage()
+v1 <- viewport( x = 0.5, y = 0.75, width = 1, height = 1 )
+v2 <- viewport( x = 0.2, y = 0.15, width = 0.39, height = 0.3 )
+v3 <- viewport( x = 0.75, y = 0.25, width = 0.4, height = 0.52 )
+print( NEmap, vp = v1 )
+print( USmap, vp = v2 )
+# grid.segments( x0 = 0.16, y0 = 0.175, x1 = 0.059, y1 = 0.695 )
+# grid.segments( x0 = 0.21, y0 = 0.17, x1 = 0.945, y1 = 0.575 )
+# grid.segments( x0 = 0.45, y0 = 0.85, x1 = 0.67, y1 = 0.04 )
+print( brownMap, vp = v3 )
+
+```
+
+```{r diagMapFiguRe}
+
+grid.newpage()
+v1 <- viewport( x = 0.8, y = 0.85, width = 0.39, height = 0.3 )
+v2 <- viewport( x = 0.5, y = 0.6, width = 1, height = 1 )
+v3 <- viewport( x = 0.25, y = 0.25, width = 0.4, height = 0.52 )
+print( USmap, vp = v1 )
+print( NEmap, vp = v2 )
+print( brownMap, vp = v3 )
+# grid.segments( x0 = 0.77, y0 = 0.89, x1 = 0.06, y1 = 0.8 )
+# grid.segments( x0 = 0.805, y0 = 0.87, x1 = 0.948, y1 = 0.405 )
+# grid.segments( x0 = 0.45, y0 = 0.78, x1 = 0.13, y1 = 0.476 )
+# grid.segments( x0 = 0.506, y0 = 0.68, x1 = 0.374, y1 = 0.024 )
+
+```
+
+```{r ggmapFiguRe}
+
+bbbox <- make_bbox( lon = long, lat = lat, data = brownCo, f = 0 )
+
+studyArea <- brownMap + 
+  coord_fixed( xlim = c( -100.15, -99 ), 
+               ylim = c( 42.05, 42.9 ), 
+               ratio = 1.3 ) + 
+  inset( grob = ggplotGrob( NEmap ), 
+         xmin = -99.6, 
+         xmax = -99, 
+         ymin = 42.05, 
+         ymax = 42.3 )
+
+studyArea
+
+```
+
+```{r exploRe, eval = FALSE}
+
+#### Transformations. ####
+
+# For the duration response, a log-transformation looks pretty good. It's bounded at zero and never assumes a value of zero, so this seems like a good approach. The response also isn't discrete, so a Poisson error distribution is not an option.
+hist( fullBouts$Mins )
+hist( log( fullBouts$Mins ) )
+
+hist( fullBouts$EventStart_dl, breaks = "mins" )
+
+#### Correlations. ####
+
+# Predictors of interest (as named in 'fullBouts')
+intVars <- c( "Mins", "NestAge", "AmbientTemp", "preBoutNestTemp", "VPD", "TempDiff", "VOR_AVG", "VH_AVG", "Turbine_Distance_m", "Roads_Distance_m", "Trees_Distance_m", "Water_Distance_m", "MeanMins_bout", "Nest_Success", "Jday" )
+
+# # This is rather ugly, and it took quite a while to render. Moreover, the density of the points in most of the scatterplots makes it look as though correlations are pretty strong, when the actual coefficient is fairly low. Perhaps this is an indication that I should be using the Spearman rank correlation coefficient rather than the Pearson method. Most of the highly-correlated pairs are expected, though (e.g., VPD with AmbientTemp, AmbientTemp with TempDiff, etc.), so maybe I'll just focus on selecting variables from among those groups.
+# GGally::ggpairs( dplyr::select( fullBouts, one_of( vv ) ) )
+
+# Make a data.frame containing only the variables of interest.
+varData <- fullBouts %>% 
+  dplyr::select( one_of( intVars ) )
+
+# Find the (Pearson) correlations among those variables, omitting pairwise incomplete observations.
+corMat <- round( cor( varData, use = "pairwise.complete.obs" ), 3 )
+
+# Original was busy. Paring things down.
+corMat[ lower.tri( corMat, diag = TRUE ) ] <- NA
+
+# Now pick out the arbitrarily highly-correlated pairs of variables.
+hiCorrs <- data.frame( which( abs( corMat ) >= 0.5, arr.ind = TRUE ) ) %>% 
+  rowwise() %>% 
+  mutate( Var1 = intVars[ row ], 
+          Var2 = intVars[ col ], 
+          PearsonR = corMat[ row, col ] )
+# with( fullBouts, cor( NestAge, Jday, use = "pairwise.complete.obs" ) )
+# with( fullBouts, cor( NestAge, AmbientTemp, use = "pairwise.complete.obs" ) )
+# with( fullBouts, cor( AmbientTemp, Jday, use = "pairwise.complete.obs" ) )
+
+## Try the Spearman Rank Correlation Coefficient (tests for monotonic, rather than mere linear, associations). ##
+
+# Find the (Spearman) correlations among those variables, omitting pairwise incomplete observations.
+scorMat <- round( cor( varData, method = "spearman", use = "pairwise.complete.obs" ), 3 )
+
+# Original was busy. Paring things down.
+scorMat[ lower.tri( scorMat, diag = TRUE ) ] <- NA
+
+# Now pick out the arbitrarily highly-correlated pairs of variables.
+hiScorrs <- data.frame( which( abs( scorMat ) >= 0.5, arr.ind = TRUE ) ) %>% 
+  rowwise() %>% 
+  mutate( Var1 = intVars[ row ], 
+          Var2 = intVars[ col ], 
+          SpearmanR = scorMat[ row, col ] )
+# with( fullBouts, cor( NestAge, Jday, method = "spearman", use = "pairwise.complete.obs" ) )
+# with( fullBouts, cor( NestAge, AmbientTemp, method = "spearman", use = "pairwise.complete.obs" ) )
+# with( fullBouts, cor( AmbientTemp, Jday, method = "spearman", use = "pairwise.complete.obs" ) )
+
+# with( fullBouts, plot( VH_AVG, VOR_AVG ) )
+
+## Summary: There are certainly strong correlations where I'd expect them (among AmbientTemp, TempDiff, and VPD). Picking just one of those seems like a good idea, and I would imagine TempDiff and/or VPD are more proximally important in governing off-bout decision making in chickens. Their correlation with one another isn't *so* strong (Pearson's r = -0.536, Spearman's rho = -0.521), but they're definitely related to one another. VPD is more like AmbientTemp than is TempDiff, so maybe I'll choose TempDiff, as the variable that's least alike relative to the others.
+```
+
+```{r DURranef}
+
+globalMinsMod <- "Mins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday"
+
+# Histograms suggest and Box-Cox power transformation confirms a log-transformation on the duration variable might not be a bad thing. Done.
+bcMinTransform <- boxcox( as.formula( globalMinsMod ), 
+                          data = fullBouts, 
+                          plotit = FALSE )
+l_est <- bcMinTransform$x[ which.max( bcMinTransform$y ) ]
+fullBouts$tMins <- ifelse( test = rep( l_est != 0, length( fullBouts$Mins ) ), 
+                           yes = fullBouts$Mins^l_est, 
+                           no = log( fullBouts$Mins ) )
+
+globalMinsMod <- paste( "t", globalMinsMod, sep = "" )
+
+dur.ranef <- list( int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   year = lmer( as.formula( paste( globalMinsMod, " + ( year - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   year.int = lmer( as.formula( paste( globalMinsMod, " + ( year | fID )", sep = "" ) ), data = fullBouts ),
+                   year_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( year - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   age = lmer( as.formula( paste( globalMinsMod, " + ( NestAge - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   age.int = lmer( as.formula( paste( globalMinsMod, " + ( NestAge | fID )", sep = "" ) ), data = fullBouts ), 
+                   age_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( NestAge - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # age.temp = lmer( as.formula( paste( globalMinsMod, " + ( NestAge * TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # age.temp.int = lmer( as.formula( paste( globalMinsMod, " + ( NestAge * TempDiff | fID )", sep = "" ) ), data = fullBouts ), 
+                   # age.temp_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( NestAge * TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   temp = lmer( as.formula( paste( globalMinsMod, " + ( TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   temp.int = lmer( as.formula( paste( globalMinsMod, " + ( TempDiff | fID )", sep = "" ) ), data = fullBouts ), 
+                   temp_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   vor = lmer( as.formula( paste( globalMinsMod, " + ( VOR_AVG - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   vor.int = lmer( as.formula( paste( globalMinsMod, " + ( VOR_AVG | fID )", sep = "" ) ), data = fullBouts ),
+                   vor_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( VOR_AVG - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   turb = lmer( as.formula( paste( globalMinsMod, " + ( Turbine_within_1km - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   turb.int = lmer( as.formula( paste( globalMinsMod, " + ( Turbine_within_1km | fID )", sep = "" ) ), data = fullBouts ),
+                   turb_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Turbine_within_1km - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   road = lmer( as.formula( paste( globalMinsMod, " + ( Roads_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   road.int = lmer( as.formula( paste( globalMinsMod, " + ( Roads_Distance_m | fID )", sep = "" ) ), data = fullBouts ),
+                   road_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Roads_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   h2o = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   h2o.int = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m | fID )", sep = "" ) ), data = fullBouts ),
+                   h2o_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Water_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   # h2o.Jday = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   # h2o.Jday.int = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m * Jday | fID )", sep = "" ) ), data = fullBouts ),
+                   # h2o.Jday_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   Jday = lmer( as.formula( paste( globalMinsMod, " + ( Jday - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   Jday.int = lmer( as.formula( paste( globalMinsMod, " + ( Jday | fID )", sep = "" ) ), data = fullBouts ), 
+                   Jday_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Jday - 1 | fID )", sep = "" ) ), data = fullBouts ) )
+
+
+CC <- convCheckR( dur.ranef ) # ≥50 warnings! Many suggestions to re-scale variables (understandable: VOR ranges 0.25--3, road distance ranges 30--2500)
+# UnID:         age.temp, age.temp.int, age.temp_int, turb, all road, all h2o, all Jday
+# LargeMaxGrad: year_int, age.temp.int, turb_int, road.int, h2o.int, all h2o.Jday, Jday.int, Jday_int
+# LargeParGrad: age.temp.int, road.int, h2o.int, all h2o.Jday, Jday.int, Jday_int
+# Singular:     vor.int, vor_int, road.int, road_int, all h2o but h2o
+
+# Try scaling and centering continuous variables.
+
+csfullBouts <- fullBouts %>% 
+  mutate( NestAge = ( NestAge - mean( NestAge, na.rm = TRUE ) ) / sd( NestAge, na.rm = TRUE ), 
+          TempDiff = ( TempDiff - mean( TempDiff, na.rm = TRUE ) ) / sd( TempDiff, na.rm = TRUE ), 
+          VOR_AVG = ( VOR_AVG - mean( VOR_AVG, na.rm = TRUE ) ) / sd( VOR_AVG, na.rm = TRUE ), 
+          Roads_Distance_m = ( Roads_Distance_m - mean( Roads_Distance_m, na.rm = TRUE ) ) / sd( Roads_Distance_m, na.rm = TRUE ), 
+          Water_Distance_m = ( Water_Distance_m - mean( Water_Distance_m, na.rm = TRUE ) ) / sd( Water_Distance_m, na.rm = TRUE ), 
+          Jday = ( Jday - mean( Jday, na.rm = TRUE ) ) / sd( Jday, na.rm = TRUE ) )
+
+dur.ranef_cs <- lapply( X = dur.ranef, 
+                        FUN = function( .mm ) update( .mm, data = csfullBouts ) )
+
+# CC <- convCheckR( dur.ranef_cs ) # Much better (only 7 warnings; still apparent issues with gradients, Hessians, identifiability, etc.(?))
+# # UnID:         year.int, year_int, turb
+# # LargeMaxGrad: year, year.int, year_int, turb_int, h2o.Jday_int
+# # LargeParGrad: NONE!
+# # Singular:     vor.int, vor_int, road_int, all h2o but h2o, all h2o.Jday but h2o.Jday
+
+# # Try additional iterations.
+# 
+# dur.ranef_cs.plus <- lapply( X = dur.ranef_cs,
+#                              FUN = function( .mm ) update( .mm,
+#                                                            start = getME( .mm, c( "theta", "fixef" ) ),
+#                                                            control = lmerControl( optCtrl = list( maxfun = 2e4 ) ) ) )
+# 
+# CC <- convCheckR( dur.ranef_cs.plus ) # 9 warnings; mostly the same, but with more suggestions to re-scale variables
+# # UnID:         year, year.int, turb, turb_int
+# # LargeMaxGrad: year, year.int, year_int, turb, h2o.Jday_int
+# # LargeParGrad: NONE!
+# # Singular:     year_int, vor.int, vor_int, turb_int, road_int, all h2o but h2o, all h2o.Jday
+
+# # Let's try a different optimizer. BOBYQA?
+
+dur.ranef_cs.plus.bobyqa <- lapply( X = dur.ranef_cs,
+                                    FUN = function( .mm ) update( .mm,
+                                                                  control = lmerControl( optimizer = "bobyqa",
+                                                                                         optCtrl = list( maxfun = 2e4 ) ) ) )
+
+# CC <- convCheckR( dur.ranef_cs.plus.bobyqa ) # back to same 7 warnings as with _cs
+# # UnID:         year.int, year_int, turb
+# # LargeMaxGrad: year, year.int, year_int, turb_int, h2o.Jday_int
+# # LargeParGrad: NONE!
+# # Singular:     vor.int, vor_int, road_int, all h2o but h2o, all h2o.Jday
+
+# # Perhaps not. Nelder-Mead?
+# 
+# dur.ranef_cs.plus.neldermead <- lapply( X = dur.ranef_cs,
+#                                         FUN = function( .mm ) update( .mm,
+#                                                                       # start = getME( .mm, c( "theta", "fixef" ) ),
+#                                                                       control = lmerControl( optimizer = "Nelder_Mead",
+#                                                                                              optCtrl = list( maxfun = 2e4 ) ) ) )
+
+# ## The following analysis evaluated the neldermead fit when it started from the optimized parameters from the original _cs fit. I'm not sure that's a good approach, so I've removed that specification (see the call to update above). This throws a few more warnings of the same sort, but estimates are generally the same (although notably, the AICc rankings differ--but the top-ranked model is the same).
+# 
+# CC <- convCheckR( dur.ranef_cs.plus.neldermead ) # Better! Just 5 warnings; 3 rescales and a paired unable to evaluate/degenerate Hessian
+# # UnID:         year, year.int, turb_int
+# # LargeMaxGrad: year, year.int, year_int, turb_int, h2o.Jday_int
+# # LargeParGrad: NONE!
+# # Singular:     vor.int, vor_int, road_int, all h2o but h2o, all h2o.Jday but h2o.Jday
+
+# # # Let's try optimx's nlminb optimizer.
+# # 
+# # library( optimx )
+# # dur.ranef_cs.plus.nlminb <- lapply( X = dur.ranef_cs,
+# #                                     FUN = function( .mm ) update( .mm,
+# #                                                                   # start = getME( .mm, c( "theta", "fixef" ) ),
+# #                                                                   control = lmerControl( optimizer = "optimx",
+# #                                                                                          optCtrl = list( method = "nlminb",
+# #                                                                                                          maxit = 2e5 ) ) ) )
+
+# 12 warnings. That makes bobyqa seem to be the best.
+
+```
+
+```{r DURranefSelection}
+
+dur.ranef_fit <- dur.ranef_cs.plus.bobyqa
+
+dur.ranef_aicc <- sapply( X = dur.ranef_fit, FUN = AICc )
+dur.ranef_delta <- dur.ranef_aicc - min( dur.ranef_aicc )
+dur.ranef_wts <- exp( -0.5 * dur.ranef_delta )
+dur.ranef_wts <- dur.ranef_wts / sum( dur.ranef_wts )
+dur.ranef_REs <- sapply( X = dur.ranef_fit, FUN = function( .mm ) fetch.RE( .mm, as.form = TRUE ) )
+dur.ranef_nFE <- sapply( X = dur.ranef_fit, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
+dur.ranef_nRE <- sapply( X = dur.ranef_fit, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
+
+dur.ranef_selection <- data.frame( Model = names( dur.ranef_aicc ), 
+                                   RE = dur.ranef_REs, 
+                                   AICc = dur.ranef_aicc, 
+                                   DeltaAICc = dur.ranef_delta, 
+                                   AWt = dur.ranef_wts, 
+                                   nFE = dur.ranef_nFE, 
+                                   nRE = dur.ranef_nRE )[ order( dur.ranef_delta ), ]
+
+dur.ranef_selection.abbrev <- dur.ranef_selection %>% 
+  filter( DeltaAICc <= 10 )
+
+# Happily, all the models with DeltaAICc ≤ 10 are non-singular, have good gradients, and are identifiable. Major differences are in the number of RE parameters.
+
+# Top-ranked model (by Delta AICc) has the following random-effects structure: (1 | fID) + (NestAge * TempDiff - 1 | fID)
+# Contenders have Delta AICc 0.497 (NestAge * TempDiff | fID), 2.123 (1 | fID) + (NestAge - 1 | fID), 3.204 (NestAge | fID), 7.313 (1 | fID) + (Jday - 1 | fID)...
+dur.ranef_topMod <- dur.ranef_fit[[ which.min( dur.ranef_delta ) ]]
+
+```
+
+```{r DURfixefSelection}
+
+dur.fixef_baseMod <- update( dur.ranef_topMod, REML = FALSE )
+
+# ## ITERATION 1: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: Water_Distance_m:Jday (p=0.97843)
+
+# ## ITERATION 2: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: Jday (p=0.76763)
+
+# ## ITERATION 3: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: fYear (p=0.56314)
+
+# ## ITERATION 4: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: VOR_AVG (p=0.60835)
+
+# ## ITERATION 5: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ NestAge * TempDiff + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: NestAge:TempDiff (p=0.20524)
+
+# ## ITERATION 6: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ NestAge + TempDiff + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: Water_Distance_m (p=0.14670)
+
+# ## ITERATION 7: ##
+# 
+dur.fixef <- lmerTest::lmer( tMins ~ NestAge + TempDiff + Turbine_within_1km + Roads_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                             data = csfullBouts,
+                             control = lmerControl( optimizer = "bobyqa",
+                                                    optCtrl = list( maxfun = 2e4 ) ),
+                             REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: NestAge (p=0.1648) (RETAINED, as NestAge is in random-effects structure); next-least-significant term: Turbine_within_1km (p=0.0127)
+
+### Hmmm... ###
+
+# ## ITERATION 8: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ TempDiff + Turbine_within_1km + Roads_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: Turbine_within_1km (p=0.0140)
+
+dur.mod <- update( dur.fixef, REML = TRUE )
+
+```
+
+```{r DURvalidatR}
+
+dur.test <- augment( dur.mod ) %>% 
+  mutate( NestAge = round( ( NestAge * sd( fullBouts$NestAge, na.rm = TRUE ) ) + mean( fullBouts$NestAge, na.rm = TRUE ), digits = 0 ), 
+          TempDiff = ( TempDiff * sd( fullBouts$TempDiff, na.rm = TRUE ) ) + mean( fullBouts$TempDiff, na.rm = TRUE ), 
+          Roads_Distance_m = ( Roads_Distance_m * sd( fullBouts$Roads_Distance_m, na.rm = TRUE ) ) + mean( fullBouts$Roads_Distance_m, na.rm = TRUE ), 
+          Mins = exp( tMins ), 
+          .mu = exp( .fitted ), 
+          .std.resid = std.resid.glmer( dur.mod ), 
+          .hat = hatvalues( dur.fixef ) ) %>% 
+  dplyr::select( -.rownames )
+ests <- influence.ME::influence( dur.mod, obs = TRUE )
+dur.test$.cooksd <- cooks.distance( ests )[ which( !is.na( fullBouts$NestAge ) ) ]
+
+rVf_dur <- ggplot( data = dur.test, 
+                   aes( x = .fitted, 
+                        y = .resid ) ) + 
+  geom_smooth( colour = "seashell4" ) + 
+  geom_hline( yintercept = 0, 
+              linetype = "dashed" ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Fitted values", 
+        y = "Residuals" ) + 
+  theme( text = element_text( size = 12 ) )
+
+y <- quantile( x = dur.test$.std.resid, probs = c( 0.25, 0.75 ) )
+x <- qnorm( p = c( 0.25, 0.75 ) )
+slope <- diff( y ) / diff( x )
+int <- y[ 1L ] - ( slope * x[ 1L ] )
+
+qq_dur <- ggplot( data = dur.test, 
+                  aes( sample = .std.resid ) ) + 
+  geom_abline( slope = slope, 
+               intercept = int, 
+               colour = "tomato" ) + 
+  stat_qq( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Theoretical quantiles", 
+        y = "Standardized residuals" ) + 
+  theme( text = element_text( size = 12 ) )
+
+sl_dur <- ggplot( data = dur.test, 
+                  aes( x = .fitted, 
+                       y = sqrt( abs( .std.resid ) ) ) ) + 
+  geom_smooth( colour = "seashell4" ) + 
+  geom_hline( yintercept = 1, 
+              linetype = "dashed" ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Fitted values", 
+        y = "√|Standardized residuals|" ) + 
+  theme( text = element_text( size = 12 ) )
+
+lev_dur <- ggplot( data = dur.test, 
+                   aes( x = .hat, 
+                        y = .std.resid, 
+                        size = .cooksd ) ) + 
+  geom_hline( yintercept = 0,
+              size = 1,
+              colour = "grey" ) +
+  geom_vline( xintercept = 0,
+              size = 1,
+              colour = "grey" ) +
+  geom_point() +
+  theme_classic() +
+  labs( x = "Leverage",
+        y = "Standardized residuals",
+        size = expression( "Cook's distance" ) ) +
+  theme( legend.position = "bottom" )
+
+```
+
+```{r DURcheckR}
+
+rVna <- ggplot( data = dur.test, 
+                aes( x = NestAge, 
+                     y = .resid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Nest age (d)", 
+        y = "Residuals" )
+
+rVtd <- ggplot( data = dur.test, 
+                aes( x = TempDiff, 
+                     y = .resid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Temperature difference (°C)", 
+        y = "Residuals" )
+
+rVtb <- ggplot( data = dur.test, 
+                aes( x = Turbine_within_1km, 
+                     y = .resid ) ) + 
+  geom_boxplot( fill = "grey24" ) + 
+  theme_classic() + 
+  labs( x = "Distance to nearest wind turbine", 
+        y = "Residuals" ) + 
+  scale_x_discrete( limits = c( "TRUE", "FALSE" ), 
+                    labels = c( "FALSE" = ">1 km", 
+                                "TRUE" = "≤1 km" ) )
+
+rVrd <- ggplot( data = dur.test, 
+                aes( x = Roads_Distance_m, 
+                     y = .resid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Distance to nearest road (m)", 
+        y = "Residuals" )
+
+dur_fVo <- ggplot( data = dur.test, 
+                   aes( x = Mins, 
+                        y = .mu ) ) + 
+  geom_abline( slope = 1, 
+               intercept = 0 ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Observed off-bout duration (min)", 
+        y = "Predicted off-bout duration (min)" )
+
+rVs <- cowplot::plot_grid( rVna, rVtd, rVtb, rVrd, nrow = 2, labels = "AUTO" )
+fVo <- cowplot::plot_grid( NULL, dur_fVo, NULL, ncol = 1, rel_heights = c( 1, 2, 1 ), labels = c( "", "E", "" ) )
+cowplot::plot_grid( rVs, fVo, nrow = 1, rel_widths = c( 2, 1 ) )
+
+```
+

@@ -2,11 +2,16 @@
 title: "GRPC Incubation"
 author: "Ian Hoppe"
 date: "`r format( Sys.Date(), '%B %d, %Y' )`"
-output: 
+output:
   bookdown::html_document2:
-    theme: cosmo
+    theme: lumen
     highlight: tango
     number_sections: FALSE
+    toc: TRUE
+    toc_float: TRUE
+bibliography: [ refs.bib, pkgs.bib ]
+link-citations: TRUE
+csl: the-auk.csl
 ---
 
 ```{r initializR, include = FALSE}
@@ -29,13 +34,17 @@ library( raster )
 library( rgeos )
 library( rgdal )
 library( ggmap )
-library( MuMIn )
+library( MuMIn )       # AICc
+library( broom )
 library( maps )
 library( grid )
-library( lme4 )
+library( lme4 )        # (g)lmer, etc.
 library( MASS )
-library( ggsn )
+library( ggsn )        # scalebar and north
 library( sp )
+
+knitr::write_bib( x = c( "SDMTools", "lme4", "MuMIn" ), 
+                  file = "pkgs.bib" )
 
 ```
 
@@ -209,6 +218,34 @@ fetch.RE <- function( .mm, as.form = FALSE ){
   .re <- c( .re, .rhs[ 3 ] )
   if( as.form ) .re <- paste( .re, collapse = " + " )
   return( .re )
+}
+
+# fetch.FE returns the fixed-effects component(s) from a merMod as a character vector
+fetch.FE <- function( .mm ){
+  .rhs <- as.character( .mm@call$formula[[ 3 ]] )
+  .fe <- stringr::str_split_fixed( .rhs[ 2 ], "\\ \\+\\ \\(", n = 2 )[ 1 ]
+  return( .fe )
+}
+
+# Calculate standardized [deviance] residuals for objects of class "merMod" produced by lme4::(g)lmer.
+std.resid.glmer <- function( .glmer ){
+  
+  if( !any( c( isLMM( .glmer ), isGLMM( .glmer ) ) ) ){
+    warning( "wrong class" )
+  }else{
+  
+  dev.resid <- residuals( .glmer, type = "deviance" )
+    
+  # Calculate residual mean square of model variance (based on Table 5.5 [p. 68] of Zuur et al. 2007).
+  ms <- sum( dev.resid^2 ) / df.residual( .glmer )
+  
+  # Calculate standardized residuals (based on eqn. of p. 65 in Zuur et al. 2007).
+  std.resid <- dev.resid / sqrt( ms * ( 1 - hatvalues( .glmer ) ) )
+  
+  return( std.resid )
+  
+  }
+  
 }
 
 ```
@@ -709,39 +746,22 @@ monthTemps <- weatherSun %>%
 
 ```
 
-```{r sandbox}
+###**ABSTRACT** {#abstract}
 
-boutsT <- bouts
-year( boutsT$EventStart ) <- 2014
-yday( boutsT$EventStart ) <- 1
+###**KEY WORDS** {#keywords}
 
-ggplot( data = filter( boutsT, Event == "Off-bout" ), 
-        aes( x = EventStart ) ) + 
-  geom_polygon( data = twiPoly, 
-                inherit.aes = FALSE, 
-                aes( x = Time, 
-                     y = Y, 
-                     group = Event ), 
-                alpha = 0.5 ) + 
-  geom_segment( data = sunLine, 
-                inherit.aes = FALSE, 
-                aes( x = Time, 
-                     xend = Time, 
-                     y = 0, 
-                     yend = Inf, 
-                     group = Event ) ) + 
-  geom_histogram( bins = 96, 
-                  colour = "white", 
-                  fill = "black" ) + 
-  scale_x_datetime( date_breaks = "60 min",
-                    date_labels = "%H:%M" ) + 
-  theme_classic() + 
-  theme( axis.text.x = element_text( angle = 45, 
-                                     hjust = 1 ) ) + 
-  labs( x = "Time", 
-        y = "Frequency" )
+###**INTRODUCTION** {#intro}
 
+```{r INTROnotes, eval = FALSE, include = FALSE}
+# --clear, referenced, logical progression to primary objectives
+
+# --concise synthesis of current and historical literature specific to the main topic
+# ----justify why the research was necessary and conducted
+
+# --clear and succinct statement of objectives and hypotheses
 ```
+
+###**STUDY AREA** {#studyarea}
 
 ```{r mapR}
 
@@ -806,17 +826,32 @@ GRPC_range <- spTransform( readOGR( dsn = "data/distribution/GRPC_range/GPC_Rang
 # Prepare the range and landscape data for plotting with ggplot2 and find the intersection between each layer and the relevant spatial extent.
 GRPC_range.dfc <- fortify( gIntersection( spgeom1 = GRPC_range, spgeom2 = NE_poly ) )
 water.shp@data$id <- rownames( water.shp@data )
-water.dfc <- fortify( gIntersection( spgeom1 = water.shp, spgeom2 = brown_poly ) )
-water.dfcsa <- fortify( crop( x = water.shp, y = nestsSPDF ), region = "id" )
+water.dfc <- fortify( gIntersection( spgeom1 = water.shp, spgeom2 = brown_poly ) ) %>% 
+  mutate( type = "water" )
+water.dfcsa <- fortify( crop( x = water.shp, y = nestsSPDF ), region = "id" ) %>% 
+  mutate( type = "water" )
 trees.shp@data$id <- rownames( trees.shp@data )
-trees.dfc <- fortify( gIntersection( spgeom1 = trees.shp, spgeom2 = brown_poly ) )
-trees.dfcsa <- fortify( crop( x = trees.shp, y = nestsSPDF ), region = "id" )
+trees.dfc <- fortify( gIntersection( spgeom1 = trees.shp, spgeom2 = brown_poly ) ) %>% 
+  mutate( type = "trees" )
+trees.dfcsa <- fortify( crop( x = trees.shp, y = nestsSPDF ), region = "id" ) %>% 
+  mutate( type = "trees" )
+
+cover.dfc <- bind_rows( water.dfc, trees.dfc )
+cover.dfcsa <- bind_rows( water.dfcsa, trees.dfcsa )
+
 roads_major.shp@data$id <- rownames( roads_major.shp@data )
-roads_major.dfc <- fortify.SL( gIntersection( spgeom1 = roads_major.shp, spgeom2 = brown_poly ) )
-roads_major.dfcsa <- fortify.SL( crop( x = roads_major.shp, y = nestsSPDF ) )
+roads_major.dfc <- fortify.SL( gIntersection( spgeom1 = roads_major.shp, spgeom2 = brown_poly ) ) %>% 
+  mutate( type = "major" )
+roads_major.dfcsa <- fortify.SL( crop( x = roads_major.shp, y = nestsSPDF ) ) %>% 
+  mutate( type = "major" )
 roads_minor.shp@data$id <- rownames( roads_minor.shp@data )
-roads_minor.dfc <- fortify.SL( gIntersection( spgeom1 = roads_minor.shp, spgeom2 = brown_poly ) )
-roads_minor.dfcsa <- fortify.SL( crop( x = roads_major.shp, y = nestsSPDF ) )
+roads_minor.dfc <- fortify.SL( gIntersection( spgeom1 = roads_minor.shp, spgeom2 = brown_poly ) ) %>% 
+  mutate( type = "minor" )
+roads_minor.dfcsa <- fortify.SL( crop( x = roads_minor.shp, y = nestsSPDF ) ) %>% 
+  mutate( type = "minor" )
+
+roads.dfc <- bind_rows( roads_major.dfc, roads_minor.dfc )
+roads.dfcsa <- bind_rows( roads_major.dfcsa, roads_minor.dfcsa )
 
 USmap <- ggplot( data = usa, 
                  aes( x = long, 
@@ -830,8 +865,9 @@ USmap <- ggplot( data = usa,
                   ymax = ymax + ( 0.05 * ( ymax - ymin ) ) ), 
              alpha = 0, 
              colour = "black" ) + 
-  geom_polygon( fill = alpha( "ivory", 0.5 ), 
-                colour = "black" ) + 
+  geom_polygon( fill = "white", 
+                colour = "black", 
+                size = 0.25 ) + 
   geom_polygon( data = filter( usa, region == "nebraska" ) ) + 
   coord_fixed( ratio = 1.4 ) + 
   theme_classic() + 
@@ -848,8 +884,9 @@ NEmap <- ggplot( data = nebraska,
                  aes( x = long,
                       y = lat,
                       group = group ) ) +
-  geom_polygon( fill = alpha( "ivory", 0.5 ),
-                colour = "black" ) + 
+  geom_polygon( fill = "white",
+                colour = "black", 
+                size = 0.25 ) + 
   geom_polygon( data = GRPC_range.dfc, 
                 aes( group = group ), 
                 alpha = 0.6 ) + 
@@ -878,32 +915,33 @@ brownMap <- ggplot( data = brownCo,
                     aes( x = long,
                          y = lat,
                          group = group ) ) +
-  geom_polygon( fill = alpha( "ivory", 0.5 ),
-                colour = "black" ) + 
-  geom_polygon( data = water.dfc, 
-                colour = "midnightblue", 
-                fill = "midnightblue" ) + 
-  geom_polygon( data = trees.dfc,
-                colour = "forestgreen",
-                fill = "forestgreen" ) + 
-  geom_path( data = roads_major.dfc, 
-             colour = "grey" ) + 
-  geom_path( data = roads_minor.dfc, 
-             colour = "grey" ) + 
-  geom_point( data = data.frame( turbines.shp@coords ), 
-              inherit.aes = FALSE, 
-              aes( x = coords.x1, 
-                   y = coords.x2 ), 
-              shape = 8 ) + 
+  geom_polygon( fill = "white",
+                colour = "black", 
+                size = 0.25 ) + 
+  geom_polygon( data = cover.dfc,
+                inherit.aes = FALSE,
+                aes( x = long,
+                     y = lat,
+                     group = interaction( group, type ),
+                     fill = type ) ) +
+  geom_path( data = roads.dfc, 
+             alpha = 0.4, 
+             aes( group = interaction( group, type ) ) ) +
+  geom_point( data = data.frame( turbines.shp@coords ),
+              inherit.aes = FALSE,
+              aes( x = coords.x1,
+                   y = coords.x2 ),
+              shape = 8 ) +
   geom_point( data = data.frame( nestsSPDF@coords ),
               inherit.aes = FALSE,
               aes( x = UTM_E,
-                   y = UTM_N ), 
-              colour = "firebrick1" ) + 
+                   y = UTM_N ) ) +
   coord_fixed( ratio = 1.3 ) +
+  scale_fill_grey() + 
   theme_classic() +
   theme( line = element_blank(),
-         text = element_blank(),
+         axis.title = element_blank(), 
+         axis.text = element_blank(), 
          plot.background = element_rect( fill = "transparent",
                                          colour = "transparent" ),
          panel.background = element_rect( fill = "transparent",
@@ -919,92 +957,63 @@ brownMap <- ggplot( data = brownCo,
          location = "topright", 
          symbol = 3 )
 
-SAmap <- ggplot( data = water.dfcsa, 
+SAmap <- ggplot( data = cover.dfcsa, 
                  aes( x = long, 
                       y = lat, 
                       group = group ) ) + 
-  geom_polygon( colour = "midnightblue", 
-                fill = "midnightblue" ) + 
-  geom_polygon( data = trees.dfcsa, 
-                colour = "forestgreen", 
-                fill = "forestgreen" ) + 
-  geom_path( data = roads_major.dfcsa, 
-             colour = "grey" ) + 
-  geom_path( data = roads_minor.dfcsa, 
-             colour = "grey" ) + 
-  geom_point( data = data.frame( turbines.shp@coords ), 
-              inherit.aes = FALSE, 
-              aes( x = coords.x1, 
-                   y = coords.x2 ), 
-              shape = 8 ) + 
+  geom_polygon( aes( group = interaction( group, type ),
+                     fill = type ) ) +
+  geom_path( data = roads.dfcsa, 
+             aes( group = interaction( group, type ) ), 
+             alpha = 0.4 ) + 
+  geom_point( data = data.frame( turbines.shp@coords ),
+              inherit.aes = FALSE,
+              aes( x = coords.x1,
+                   y = coords.x2 ),
+              shape = 8 ) +
   geom_point( data = data.frame( nestsSPDF@coords ), 
               inherit.aes = FALSE, 
               aes( x = UTM_E, 
-                   y = UTM_N ), 
-              colour = "firebrick1" ) + 
+                   y = UTM_N ) ) + 
   coord_fixed( ratio = 1.3 ) + 
+  scale_fill_grey() + 
   theme_classic() + 
   theme( line = element_blank(), 
-         text = element_blank() )
-
-# hatchPal <- colorFactor( palette = c( "mediumseagreen", "tomato" ), domain = c( "hatch", "fail" ), ordered = TRUE )
-# 
-# leaflet( nestsSPDF ) %>% 
-#   addTiles() %>% 
-#   addCircleMarkers( stroke = FALSE, 
-#                     color = ~hatchPal( fate ), 
-#                     fillOpacity = 0.75, 
-#                     popup = ~htmlEscape( Nest ) )
+         axis.text = element_blank(), 
+         axis.title = element_blank() )
 
 ```
 
 ```{r triMapFiguRe}
 
+pd
 grid.newpage()
 v1 <- viewport( x = 0.5, y = 0.75, width = 1, height = 1 )
 v2 <- viewport( x = 0.2, y = 0.15, width = 0.39, height = 0.3 )
 v3 <- viewport( x = 0.75, y = 0.25, width = 0.4, height = 0.52 )
 print( NEmap, vp = v1 )
 print( USmap, vp = v2 )
-# grid.segments( x0 = 0.16, y0 = 0.175, x1 = 0.059, y1 = 0.695 )
-# grid.segments( x0 = 0.21, y0 = 0.17, x1 = 0.945, y1 = 0.575 )
-# grid.segments( x0 = 0.45, y0 = 0.85, x1 = 0.67, y1 = 0.04 )
 print( brownMap, vp = v3 )
 
 ```
 
-```{r diagMapFiguRe}
-
-grid.newpage()
-v1 <- viewport( x = 0.8, y = 0.85, width = 0.39, height = 0.3 )
-v2 <- viewport( x = 0.5, y = 0.6, width = 1, height = 1 )
-v3 <- viewport( x = 0.25, y = 0.25, width = 0.4, height = 0.52 )
-print( USmap, vp = v1 )
-print( NEmap, vp = v2 )
-print( brownMap, vp = v3 )
-# grid.segments( x0 = 0.77, y0 = 0.89, x1 = 0.06, y1 = 0.8 )
-# grid.segments( x0 = 0.805, y0 = 0.87, x1 = 0.948, y1 = 0.405 )
-# grid.segments( x0 = 0.45, y0 = 0.78, x1 = 0.13, y1 = 0.476 )
-# grid.segments( x0 = 0.506, y0 = 0.68, x1 = 0.374, y1 = 0.024 )
-
+```{r STUDYAREAnotes, eval = FALSE, include = FALSE}
+# --past tense
 ```
 
-```{r ggmapFiguRe}
+###**METHODS** {#methods}
 
-bbbox <- make_bbox( lon = long, lat = lat, data = brownCo, f = 0 )
-
-studyArea <- brownMap + 
-  coord_fixed( xlim = c( -100.15, -99 ), 
-               ylim = c( 42.05, 42.9 ), 
-               ratio = 1.3 ) + 
-  inset( grob = ggplotGrob( NEmap ), 
-         xmin = -99.6, 
-         xmax = -99, 
-         ymin = 42.05, 
-         ymax = 42.3 )
-
-studyArea
-
+```{r METHODSnotes, eval = FALSE, include = FALSE}
+# --characteristics
+# ----concise
+# ----active voice
+# --include
+# ----study duration
+# ----sampling protocols
+# ----dates
+# ----research or experimental design
+# ----data analyses
+# ----animal welfare protocols (at end)
 ```
 
 ```{r exploRe, eval = FALSE}
@@ -1090,9 +1099,9 @@ dur.ranef <- list( int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID )
                    age = lmer( as.formula( paste( globalMinsMod, " + ( NestAge - 1 | fID )", sep = "" ) ), data = fullBouts ), 
                    age.int = lmer( as.formula( paste( globalMinsMod, " + ( NestAge | fID )", sep = "" ) ), data = fullBouts ), 
                    age_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( NestAge - 1 | fID )", sep = "" ) ), data = fullBouts ), 
-                   age.temp = lmer( as.formula( paste( globalMinsMod, " + ( NestAge * TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
-                   age.temp.int = lmer( as.formula( paste( globalMinsMod, " + ( NestAge * TempDiff | fID )", sep = "" ) ), data = fullBouts ), 
-                   age.temp_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( NestAge * TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # age.temp = lmer( as.formula( paste( globalMinsMod, " + ( NestAge * TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
+                   # age.temp.int = lmer( as.formula( paste( globalMinsMod, " + ( NestAge * TempDiff | fID )", sep = "" ) ), data = fullBouts ), 
+                   # age.temp_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( NestAge * TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
                    temp = lmer( as.formula( paste( globalMinsMod, " + ( TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
                    temp.int = lmer( as.formula( paste( globalMinsMod, " + ( TempDiff | fID )", sep = "" ) ), data = fullBouts ), 
                    temp_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( TempDiff - 1 | fID )", sep = "" ) ), data = fullBouts ), 
@@ -1108,9 +1117,9 @@ dur.ranef <- list( int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID )
                    h2o = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ),
                    h2o.int = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m | fID )", sep = "" ) ), data = fullBouts ),
                    h2o_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Water_Distance_m - 1 | fID )", sep = "" ) ), data = fullBouts ),
-                   h2o.Jday = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ), data = fullBouts ),
-                   h2o.Jday.int = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m * Jday | fID )", sep = "" ) ), data = fullBouts ),
-                   h2o.Jday_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   # h2o.Jday = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ), data = fullBouts ),
+                   # h2o.Jday.int = lmer( as.formula( paste( globalMinsMod, " + ( Water_Distance_m * Jday | fID )", sep = "" ) ), data = fullBouts ),
+                   # h2o.Jday_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ), data = fullBouts ),
                    Jday = lmer( as.formula( paste( globalMinsMod, " + ( Jday - 1 | fID )", sep = "" ) ), data = fullBouts ), 
                    Jday.int = lmer( as.formula( paste( globalMinsMod, " + ( Jday | fID )", sep = "" ) ), data = fullBouts ), 
                    Jday_int = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( Jday - 1 | fID )", sep = "" ) ), data = fullBouts ) )
@@ -1135,17 +1144,17 @@ csfullBouts <- fullBouts %>%
 dur.ranef_cs <- lapply( X = dur.ranef, 
                         FUN = function( .mm ) update( .mm, data = csfullBouts ) )
 
-CC <- convCheckR( dur.ranef_cs ) # Much better (only 7 warnings; still apparent issues with gradients, Hessians, identifiability, etc.(?))
-# UnID:         year.int, year_int, turb
-# LargeMaxGrad: year, year.int, year_int, turb_int, h2o.Jday_int
-# LargeParGrad: NONE!
-# Singular:     vor.int, vor_int, road_int, all h2o but h2o, all h2o.Jday but h2o.Jday
+# CC <- convCheckR( dur.ranef_cs ) # Much better (only 7 warnings; still apparent issues with gradients, Hessians, identifiability, etc.(?))
+# # UnID:         year.int, year_int, turb
+# # LargeMaxGrad: year, year.int, year_int, turb_int, h2o.Jday_int
+# # LargeParGrad: NONE!
+# # Singular:     vor.int, vor_int, road_int, all h2o but h2o, all h2o.Jday but h2o.Jday
 
 # # Try additional iterations.
 # 
-# dur.ranef_cs.plus <- lapply( X = dur.ranef_cs, 
-#                              FUN = function( .mm ) update( .mm, 
-#                                                            start = getME( .mm, c( "theta", "fixef" ) ), 
+# dur.ranef_cs.plus <- lapply( X = dur.ranef_cs,
+#                              FUN = function( .mm ) update( .mm,
+#                                                            start = getME( .mm, c( "theta", "fixef" ) ),
 #                                                            control = lmerControl( optCtrl = list( maxfun = 2e4 ) ) ) )
 # 
 # CC <- convCheckR( dur.ranef_cs.plus ) # 9 warnings; mostly the same, but with more suggestions to re-scale variables
@@ -1169,10 +1178,10 @@ dur.ranef_cs.plus.bobyqa <- lapply( X = dur.ranef_cs,
 
 # # Perhaps not. Nelder-Mead?
 # 
-# dur.ranef_cs.plus.neldermead <- lapply( X = dur.ranef_cs, 
-#                                         FUN = function( .mm ) update( .mm, 
-#                                                                       # start = getME( .mm, c( "theta", "fixef" ) ), 
-#                                                                       control = lmerControl( optimizer = "Nelder_Mead", 
+# dur.ranef_cs.plus.neldermead <- lapply( X = dur.ranef_cs,
+#                                         FUN = function( .mm ) update( .mm,
+#                                                                       # start = getME( .mm, c( "theta", "fixef" ) ),
+#                                                                       control = lmerControl( optimizer = "Nelder_Mead",
 #                                                                                              optCtrl = list( maxfun = 2e4 ) ) ) )
 
 # ## The following analysis evaluated the neldermead fit when it started from the optimized parameters from the original _cs fit. I'm not sure that's a good approach, so I've removed that specification (see the call to update above). This throws a few more warnings of the same sort, but estimates are generally the same (although notably, the AICc rankings differ--but the top-ranked model is the same).
@@ -1182,7 +1191,7 @@ dur.ranef_cs.plus.bobyqa <- lapply( X = dur.ranef_cs,
 # # LargeMaxGrad: year, year.int, year_int, turb_int, h2o.Jday_int
 # # LargeParGrad: NONE!
 # # Singular:     vor.int, vor_int, road_int, all h2o but h2o, all h2o.Jday but h2o.Jday
-# 
+
 # # # Let's try optimx's nlminb optimizer.
 # # 
 # # library( optimx )
@@ -1197,31 +1206,19 @@ dur.ranef_cs.plus.bobyqa <- lapply( X = dur.ranef_cs,
 
 ```
 
-```{r}
-
-ll <- list( ni = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( NestAge + TempDiff - 1 | fID)", sep = "" ) ), 
-                       data = csfullBouts, 
-                       control = lmerControl( optimizer = "bobyqa", 
-                                              optCtrl = list( maxfun = 2e4 ) ) ), 
-            i = lmer( as.formula( paste( globalMinsMod, " + ( 1 | fID ) + ( NestAge * TempDiff - 1 | fID )", sep = "" ) ), 
-                      data = csfullBouts, 
-                      control = lmerControl( optimizer = "bobyqa", 
-                                             optCtrl = list( maxfun = 2e4 ) ) ) )
-
-```
-
-
 ```{r DURranefSelection}
 
-dur.ranef_aicc <- sapply( X = dur.ranef_cs.plus.bobyqa, FUN = AICc )
+dur.ranef_fit <- dur.ranef_cs.plus.bobyqa
+
+dur.ranef_aicc <- sapply( X = dur.ranef_fit, FUN = AICc )
 dur.ranef_delta <- dur.ranef_aicc - min( dur.ranef_aicc )
 dur.ranef_wts <- exp( -0.5 * dur.ranef_delta )
 dur.ranef_wts <- dur.ranef_wts / sum( dur.ranef_wts )
-dur.ranef_REs <- sapply( X = dur.ranef_cs.plus.neldermead, FUN = function( .mm ) fetch.RE( .mm, as.form = TRUE ) )
-dur.ranef_nFE <- sapply( X = dur.ranef_cs.plus.neldermead, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
-dur.ranef_nRE <- sapply( X = dur.ranef_cs.plus.neldermead, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
+dur.ranef_REs <- sapply( X = dur.ranef_fit, FUN = function( .mm ) fetch.RE( .mm, as.form = TRUE ) )
+dur.ranef_nFE <- sapply( X = dur.ranef_fit, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
+dur.ranef_nRE <- sapply( X = dur.ranef_fit, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
 
-dur.ranef_selection <- data.frame( Model = names( dur.ranef_cs.plus.nlminb ), 
+dur.ranef_selection <- data.frame( Model = names( dur.ranef_aicc ), 
                                    RE = dur.ranef_REs, 
                                    AICc = dur.ranef_aicc, 
                                    DeltaAICc = dur.ranef_delta, 
@@ -1236,7 +1233,56 @@ dur.ranef_selection.abbrev <- dur.ranef_selection %>%
 
 # Top-ranked model (by Delta AICc) has the following random-effects structure: (1 | fID) + (NestAge * TempDiff - 1 | fID)
 # Contenders have Delta AICc 0.497 (NestAge * TempDiff | fID), 2.123 (1 | fID) + (NestAge - 1 | fID), 3.204 (NestAge | fID), 7.313 (1 | fID) + (Jday - 1 | fID)...
-dur.ranef_topMod <- dur.ranef_cs.plus.bobyqa[[ which.min( dur.ranef_delta ) ]]
+dur.ranef_topMod <- dur.ranef_fit[[ which.min( dur.ranef_delta ) ]]
+
+```
+
+```{r DURfixefTrials}
+
+dur.fixef_forms <- list( int = tMins ~ 1 + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         fyr = tMins ~ fYear + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nag = tMins ~ NestAge + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         tdf = tMins ~ TempDiff + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         vor = tMins ~ VOR_AVG + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         t1k = tMins ~ Turbine_within_1km + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         rdd = tMins ~ Roads_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         h2o = tMins ~ Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         jdy = tMins ~ Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nag.tdf = tMins ~ NestAge * TempDiff + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         h2o.jdy = tMins ~ Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nag_tdf = tMins ~ NestAge + TempDiff + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         h2o_jdy = tMins ~ Water_Distance_m + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nt_t_hj = tMins ~ NestAge * TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nt_t_h.j = tMins ~ NestAge * TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nt_t_h = tMins ~ NestAge * TempDiff + Turbine_within_1km + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nt_t_j = tMins ~ NestAge * TempDiff + Turbine_within_1km + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         n.t_t_hm = tMins ~ NestAge + TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         t_t_hm = tMins ~ TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         n_t_hm = tMins ~ NestAge + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         n.t_t_h.j = tMins ~ NestAge + TempDiff + Turbine_within_1km + Water_Distance_m + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         global = tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ) )
+
+dur.fixef_trials <- lapply( X = dur.fixef_forms, 
+                            FUN = function( .ff ) lmer( .ff, 
+                                                        data = csfullBouts, 
+                                                        control = lmerControl( optimizer = "bobyqa", optCtrl = list( maxfun = 2e4 ) ) ) )
+
+dur.fixef_aicc <- sapply( X = dur.fixef_trials, FUN = AICc )
+dur.fixef_delt <- dur.fixef_aicc - min( dur.fixef_aicc )
+dur.fixef_wgts <- exp( -0.5 * dur.fixef_delt )
+dur.fixef_wgts <- dur.fixef_wgts / sum( dur.fixef_wgts )
+dur.fixef_REs <- sapply( X = dur.fixef_trials, FUN = function( .mm ) fetch.FE( .mm ) )
+dur.fixef_nFE <- sapply( X = dur.fixef_trials, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
+dur.fixef_nRE <- sapply( X = dur.fixef_trials, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
+
+dur.fixef_selection <- data.frame( Model = names( dur.fixef_trials ), 
+                                   RE = dur.fixef_REs, 
+                                   AICc = dur.fixef_aicc, 
+                                   DeltaAICc = dur.fixef_delt, 
+                                   AWt = dur.fixef_wgts, 
+                                   nFE = dur.fixef_nFE, 
+                                   nRE = dur.fixef_nRE )[ order( dur.fixef_delt ), ]
+
 
 ```
 
@@ -1246,33 +1292,270 @@ dur.fixef_baseMod <- update( dur.ranef_topMod, REML = FALSE )
 
 # ## ITERATION 1: ##
 # 
-# dur.fixef <- lmerTest::lmer( tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge * TempDiff - 1 | fID ), 
-#                              data = csfullBouts, 
-#                              control = lmerControl( optimizer = "bobyqa", 
-#                                                     optCtrl = list( maxfun = 2e4 ) ), 
+# dur.fixef <- lmerTest::lmer( tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
 #                              REML = FALSE )
 # 
-# lmerTest::summary( dur.fixef ) # least significant term: VOR_AVG (p = 0.96784)
+# lmerTest::summary( dur.fixef ) # least significant term: Water_Distance_m:Jday (p=0.97843)
 
 # ## ITERATION 2: ##
 # 
-# dur.fixef <- lmerTest::lmer( tMins ~ fYear + NestAge * TempDiff + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge * TempDiff - 1 | fID ), 
-#                              data = csfullBouts, 
-#                              control = lmerControl( optimizer = "bobyqa", 
-#                                                     optCtrl = list( maxfun = 2e4 ) ), 
+# dur.fixef <- lmerTest::lmer( tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
 #                              REML = FALSE )
 # 
-# lmerTest::summary( dur.fixef ) # least significant term: NestAge:TempDiff (0.86895)
+# lmerTest::summary( dur.fixef ) # least significant term: Jday (p=0.76763)
 
-## ITERATION 3: ##
+# ## ITERATION 3: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: fYear (p=0.56314)
 
-dur.fixef <- lmerTest::lmer( tMins ~ fYear + NestAge * TempDiff + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge * TempDiff - 1 | fID ), 
-                             data = csfullBouts, 
-                             control = lmerControl( optimizer = "bobyqa", 
-                                                    optCtrl = list( maxfun = 2e4 ) ), 
+# ## ITERATION 4: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: VOR_AVG (p=0.60835)
+
+# ## ITERATION 5: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ NestAge * TempDiff + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: NestAge:TempDiff (p=0.20524)
+
+# ## ITERATION 6: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ NestAge + TempDiff + Turbine_within_1km + Roads_Distance_m + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: Water_Distance_m (p=0.14670)
+
+# ## ITERATION 7: ##
+# 
+dur.fixef <- lmerTest::lmer( tMins ~ NestAge + TempDiff + Turbine_within_1km + Roads_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                             data = csfullBouts,
+                             control = lmerControl( optimizer = "bobyqa",
+                                                    optCtrl = list( maxfun = 2e4 ) ),
                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: NestAge (p=0.1648) (RETAINED, as NestAge is in random-effects structure); next-least-significant term: Turbine_within_1km (p=0.0127)
 
-lmerTest::summary( dur.fixef ) # least significant term: NestAge:TempDiff (0.86895)
+### Hmmm... ###
+
+# ## ITERATION 8: ##
+# 
+# dur.fixef <- lmerTest::lmer( tMins ~ TempDiff + Turbine_within_1km + Roads_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ),
+#                              data = csfullBouts,
+#                              control = lmerControl( optimizer = "bobyqa",
+#                                                     optCtrl = list( maxfun = 2e4 ) ),
+#                              REML = FALSE )
+# 
+# lmerTest::summary( dur.fixef ) # least significant term: Turbine_within_1km (p=0.0140)
+
+dur.mod <- update( dur.fixef, REML = TRUE )
 
 ```
 
+```{r DURvalidatR}
+
+dur.test <- augment( dur.mod ) %>% 
+  mutate( NestAge = round( ( NestAge * sd( fullBouts$NestAge, na.rm = TRUE ) ) + mean( fullBouts$NestAge, na.rm = TRUE ), digits = 0 ), 
+          TempDiff = ( TempDiff * sd( fullBouts$TempDiff, na.rm = TRUE ) ) + mean( fullBouts$TempDiff, na.rm = TRUE ), 
+          Roads_Distance_m = ( Roads_Distance_m * sd( fullBouts$Roads_Distance_m, na.rm = TRUE ) ) + mean( fullBouts$Roads_Distance_m, na.rm = TRUE ), 
+          Mins = exp( tMins ), 
+          .mu = exp( .fitted ), 
+          .std.resid = std.resid.glmer( dur.mod ), 
+          .hat = hatvalues( dur.fixef ) ) %>% 
+  dplyr::select( -.rownames )
+ests <- influence.ME::influence( dur.mod, obs = TRUE )
+dur.test$.cooksd <- cooks.distance( ests )[ which( !is.na( fullBouts$NestAge ) ) ]
+
+rVf_dur <- ggplot( data = dur.test, 
+                   aes( x = .fitted, 
+                        y = .resid ) ) + 
+  geom_smooth( colour = "seashell4" ) + 
+  geom_hline( yintercept = 0, 
+              linetype = "dashed" ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Fitted values", 
+        y = "Residuals" ) + 
+  theme( text = element_text( size = 12 ) )
+
+y <- quantile( x = dur.test$.std.resid, probs = c( 0.25, 0.75 ) )
+x <- qnorm( p = c( 0.25, 0.75 ) )
+slope <- diff( y ) / diff( x )
+int <- y[ 1L ] - ( slope * x[ 1L ] )
+
+qq_dur <- ggplot( data = dur.test, 
+                  aes( sample = .std.resid ) ) + 
+  geom_abline( slope = slope, 
+               intercept = int, 
+               colour = "tomato" ) + 
+  stat_qq( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Theoretical quantiles", 
+        y = "Standardized residuals" ) + 
+  theme( text = element_text( size = 12 ) )
+
+sl_dur <- ggplot( data = dur.test, 
+                  aes( x = .fitted, 
+                       y = sqrt( abs( .std.resid ) ) ) ) + 
+  geom_smooth( colour = "seashell4" ) + 
+  geom_hline( yintercept = 1, 
+              linetype = "dashed" ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Fitted values", 
+        y = "√|Standardized residuals|" ) + 
+  theme( text = element_text( size = 12 ) )
+
+lev_dur <- ggplot( data = dur.test, 
+                   aes( x = .hat, 
+                        y = .std.resid, 
+                        size = .cooksd ) ) + 
+  geom_hline( yintercept = 0,
+              size = 1,
+              colour = "grey" ) +
+  geom_vline( xintercept = 0,
+              size = 1,
+              colour = "grey" ) +
+  geom_point() +
+  theme_classic() +
+  labs( x = "Leverage",
+        y = "Standardized residuals",
+        size = expression( "Cook's distance" ) ) +
+  theme( legend.position = "bottom" )
+
+```
+
+```{r DURcheckR}
+
+rVna <- ggplot( data = dur.test, 
+                aes( x = NestAge, 
+                     y = .resid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Nest age (d)", 
+        y = "Residuals" )
+
+rVtd <- ggplot( data = dur.test, 
+                aes( x = TempDiff, 
+                     y = .resid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Temperature difference (°C)", 
+        y = "Residuals" )
+
+rVtb <- ggplot( data = dur.test, 
+                aes( x = Turbine_within_1km, 
+                     y = .resid ) ) + 
+  geom_boxplot( fill = "grey24" ) + 
+  theme_classic() + 
+  labs( x = "Distance to nearest wind turbine", 
+        y = "Residuals" ) + 
+  scale_x_discrete( limits = c( "TRUE", "FALSE" ), 
+                    labels = c( "FALSE" = ">1 km", 
+                                "TRUE" = "≤1 km" ) )
+
+rVrd <- ggplot( data = dur.test, 
+                aes( x = Roads_Distance_m, 
+                     y = .resid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Distance to nearest road (m)", 
+        y = "Residuals" )
+
+dur_fVo <- ggplot( data = dur.test, 
+                   aes( x = Mins, 
+                        y = .mu ) ) + 
+  geom_abline( slope = 1, 
+               intercept = 0 ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Observed off-bout duration (min)", 
+        y = "Predicted off-bout duration (min)" )
+
+rVs <- cowplot::plot_grid( rVna, rVtd, rVtb, rVrd, nrow = 2, labels = "AUTO" )
+fVo <- cowplot::plot_grid( NULL, dur_fVo, NULL, ncol = 1, rel_heights = c( 1, 2, 1 ), labels = c( "", "E", "" ) )
+cowplot::plot_grid( rVs, fVo, nrow = 1, rel_widths = c( 2, 1 ) )
+
+```
+
+###**RESULTS** {#results}
+
+```{r RESULTSnotes, eval = FALSE, include = FALSE}
+# --characteristics
+# ----past tense
+# ----clear, concise, organized
+# ----not repetetive of methods
+# ----describe quantitatively rather than quantitatively only
+# ----avoids synthesis more properly included in discussion
+# --includes
+# ----quantitative presentation of results
+# ----parallels presentation in methods
+```
+
+###**DISCUSSION** {#discussion}
+
+```{r DISCUSSIONnotes, eval = FALSE, include = FALSE}
+# --characteristics
+# ----concise
+# ----follows order set out in methods and results
+# ----highlights most important/significant findings
+# ----interpretations of results
+# ----comparison of results to literature
+# --include
+# ----synthesize results w.r.t. objectives
+# ----relate relevant findings to published literature/research
+# ----may include reasonable speculation and logical extensions/new hypotheses/questions
+```
+
+###**MANAGEMENT IMPLICATIONS** {#managementimplications}
+
+```{r IMPLICATIONSnotes, eval = FALSE, include = FALSE}
+# --characteristics
+# ----short (~1paragraph)
+# ----direct
+# ----specific
+# --include
+# ----management/conservations issues derived directly from results
+# ----DO NOT restate information from results or discussion
+# ----DO NOT make recommendations beyond scope of study
+```
+
+###**ACKNOWLEDGMENTS** {#acknowledgments}
+
+```{r ACKNOWLEDGMENTSnotes, eval = FALSE, include = FALSE}
+# --brief
+# --initials
+```
+
+###**APPENDIX** {#appendix}
+
+###**CODE** {#code}
+
+```{r ref.label = all_labels(), echo = TRUE, eval = FALSE}
+```
+
+###**LITERATURE CITED** {#literaturecited}
