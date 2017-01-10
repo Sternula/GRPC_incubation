@@ -11,7 +11,7 @@ output:
     toc_float: TRUE
 bibliography: [ refs.bib, pkgs.bib ]
 link-citations: TRUE
-csl: the-auk.csl
+csl: ecology.csl
 ---
 
 ```{r initializR, include = FALSE}
@@ -768,6 +768,8 @@ monthTemps <- weatherSun %>%
 # Define the target projection.
 targProj <- "+init=epsg:4326 +proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
 
+##### Import Spatial Layers. #####
+
 # Create a SpatialPointsDataFrame with the nest data.
 nestLocs <- nests[ , c( "UTM_E", "UTM_N" ) ]
 nestsSPDF <- spTransform( SpatialPointsDataFrame( coords = nestLocs,
@@ -797,7 +799,17 @@ trees.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape",
                                    layer = "Trees" ), 
                           targProj )
 
-# Grab map data for country, state, and county maps.
+# Import the GRPC range .dbf (cropped and converted to a shapefile in ArcGIS on a separate machine by Weldon Hoppe) (original from USGS Gap Analysis Program).
+GRPC_range <- spTransform( readOGR( dsn = "data/distribution/GRPC_range/GPC_Range_NE", 
+                                    layer = "GPC_Range_NE" ), 
+                           targProj )
+
+
+##### Import Spatial Areas. #####
+
+### Grab map data for country, state, and county maps.
+
+# Country
 usa <- map_data( "state" )
 USbox <- with( usa, 
                data.frame( xmin = floor( min( long ) ), 
@@ -805,12 +817,14 @@ USbox <- with( usa,
                            ymin = floor( min( lat ) ), 
                            ymax = ceiling( max( lat ) ) ) )
 
+# State
 nebraska <- map_data( "county", "nebraska" )
 NE_poly <- SpatialPolygons( Srl = list( NE_outline = Polygons( srl = list( Polygon( coords = filter( usa, region == "nebraska" )[ , c( "long", "lat" ) ], 
                                                                                     hole = FALSE ) ), 
                                                                ID = "NE_outline" ) ), 
                             proj4string = CRS( targProj ) )
 
+# County
 brownCo <- nebraska %>%
   filter( subregion == "brown" )
 brown_poly <- SpatialPolygons( Srl = list( brown_outline = Polygons( srl = list( Polygon( coords = brownCo[ , c( "long", "lat" ) ], 
@@ -818,13 +832,11 @@ brown_poly <- SpatialPolygons( Srl = list( brown_outline = Polygons( srl = list(
                                                                      ID = "brown_outline" ) ), 
                                proj4string = CRS( targProj ) )
 
-# Import the GRPC range .dbf (cropped and converted to a shapefile in ArcGIS on a separate machine by WJH) (original from USGS Gap Analysis Program).
-GRPC_range <- spTransform( readOGR( dsn = "data/distribution/GRPC_range/GPC_Range_NE", 
-                                    layer = "GPC_Range_NE" ), 
-                           targProj )
+##### Spatial Data Manipulation. #####
 
 # Prepare the range and landscape data for plotting with ggplot2 and find the intersection between each layer and the relevant spatial extent.
 GRPC_range.dfc <- fortify( gIntersection( spgeom1 = GRPC_range, spgeom2 = NE_poly ) )
+
 water.shp@data$id <- rownames( water.shp@data )
 water.dfc <- fortify( gIntersection( spgeom1 = water.shp, spgeom2 = brown_poly ) ) %>% 
   mutate( type = "water" )
@@ -836,6 +848,7 @@ trees.dfc <- fortify( gIntersection( spgeom1 = trees.shp, spgeom2 = brown_poly )
 trees.dfcsa <- fortify( crop( x = trees.shp, y = nestsSPDF ), region = "id" ) %>% 
   mutate( type = "trees" )
 
+# Create a master landcover data.frame, and one cropped to include just the study area.
 cover.dfc <- bind_rows( water.dfc, trees.dfc )
 cover.dfcsa <- bind_rows( water.dfcsa, trees.dfcsa )
 
@@ -850,9 +863,13 @@ roads_minor.dfc <- fortify.SL( gIntersection( spgeom1 = roads_minor.shp, spgeom2
 roads_minor.dfcsa <- fortify.SL( crop( x = roads_minor.shp, y = nestsSPDF ) ) %>% 
   mutate( type = "minor" )
 
+# Create a master roads data.frame, and one cropped to include just the study area.
 roads.dfc <- bind_rows( roads_major.dfc, roads_minor.dfc )
 roads.dfcsa <- bind_rows( roads_major.dfcsa, roads_minor.dfcsa )
 
+##### Map Creation. #####
+
+# Country
 USmap <- ggplot( data = usa, 
                  aes( x = long, 
                       y = lat, 
@@ -880,6 +897,7 @@ USmap <- ggplot( data = usa,
             dd2km = TRUE, 
             model = "WGS84" )
 
+# State
 NEmap <- ggplot( data = nebraska,
                  aes( x = long,
                       y = lat,
@@ -911,6 +929,7 @@ NEmap <- ggplot( data = nebraska,
          scale = 0.2, 
          symbol = 3 )
 
+# County
 brownMap <- ggplot( data = brownCo,
                     aes( x = long,
                          y = lat,
@@ -957,6 +976,7 @@ brownMap <- ggplot( data = brownCo,
          location = "topright", 
          symbol = 3 )
 
+# Study area
 SAmap <- ggplot( data = cover.dfcsa, 
                  aes( x = long, 
                       y = lat, 
@@ -1015,6 +1035,12 @@ print( brownMap, vp = v3 )
 # ----data analyses
 # ----animal welfare protocols (at end)
 ```
+
+####**Field Methods** {#fieldmethods}
+
+####**iButton Data Processing** {#ibuttonmethods}
+
+####**Statistical Analyses** {#statisticalmethods}
 
 ```{r exploRe, eval = FALSE}
 
@@ -1075,6 +1101,34 @@ hiScorrs <- data.frame( which( abs( scorMat ) >= 0.5, arr.ind = TRUE ) ) %>%
 # with( fullBouts, plot( VH_AVG, VOR_AVG ) )
 
 ## Summary: There are certainly strong correlations where I'd expect them (among AmbientTemp, TempDiff, and VPD). Picking just one of those seems like a good idea, and I would imagine TempDiff and/or VPD are more proximally important in governing off-bout decision making in chickens. Their correlation with one another isn't *so* strong (Pearson's r = -0.536, Spearman's rho = -0.521), but they're definitely related to one another. VPD is more like AmbientTemp than is TempDiff, so maybe I'll choose TempDiff, as the variable that's least alike relative to the others.
+```
+
+```{r coRrs}
+
+intVars <- c( "NestAge", "AmbientTemp", "TempDiff", "VOR_AVG", "Roads_Distance_m", "Water_Distance_m", "Jday" )
+
+var.corrs <- data.frame( t( combn( x = intVars, m = 2 ) ), stringsAsFactors = FALSE )
+
+Pcorrs <- with( var.corrs, map2( .x = as.list( X1 ), 
+                                 .y = as.list( X2 ), 
+                                 .f = function( xx, yy ) cor.test( x = fullBouts[ , xx ], 
+                                                                   y = fullBouts[ , yy ], 
+                                                                   alternative = "two.sided", 
+                                                                   method = "pearson" ) ) )
+Scorrs <- with( var.corrs, map2( .x = as.list( X1 ), 
+                                 .y = as.list( X2 ), 
+                                 .f = function( xx, yy ) cor.test( x = fullBouts[ , xx ], 
+                                                                   y = fullBouts[ , yy ], 
+                                                                   alternative = "two.sided", 
+                                                                   method = "spearman", 
+                                                                   exact = FALSE ) ) )
+
+var.corrs <- var.corrs %>% 
+  mutate( PearsonR = sapply( Pcorrs, function( .htest ) .htest$estimate ), 
+          PearsonP = sapply( Pcorrs, function( .htest ) .htest$p.value ), 
+          SpearmanR = sapply( Scorrs, function( .htest ) .htest$estimate ), 
+          SpearmanP = sapply( Scorrs, function( .htest ) .htest$p.value ) )
+
 ```
 
 ```{r DURranef}
@@ -1237,7 +1291,7 @@ dur.ranef_topMod <- dur.ranef_fit[[ which.min( dur.ranef_delta ) ]]
 
 ```
 
-```{r DURfixefTrials}
+```{r DURfixefAICcTrials}
 
 dur.fixef_forms <- list( int = tMins ~ 1 + ( 1 | fID ) + ( NestAge - 1 | fID ), 
                          fyr = tMins ~ fYear + ( 1 | fID ) + ( NestAge - 1 | fID ), 
@@ -1265,24 +1319,26 @@ dur.fixef_forms <- list( int = tMins ~ 1 + ( 1 | fID ) + ( NestAge - 1 | fID ),
 dur.fixef_trials <- lapply( X = dur.fixef_forms, 
                             FUN = function( .ff ) lmer( .ff, 
                                                         data = csfullBouts, 
-                                                        control = lmerControl( optimizer = "bobyqa", optCtrl = list( maxfun = 2e4 ) ) ) )
+                                                        control = lmerControl( optimizer = "bobyqa", optCtrl = list( maxfun = 2e4 ) ), 
+                                                        REML = FALSE ) )
 
 dur.fixef_aicc <- sapply( X = dur.fixef_trials, FUN = AICc )
 dur.fixef_delt <- dur.fixef_aicc - min( dur.fixef_aicc )
 dur.fixef_wgts <- exp( -0.5 * dur.fixef_delt )
 dur.fixef_wgts <- dur.fixef_wgts / sum( dur.fixef_wgts )
-dur.fixef_REs <- sapply( X = dur.fixef_trials, FUN = function( .mm ) fetch.FE( .mm ) )
+dur.fixef_FEs <- sapply( X = dur.fixef_trials, FUN = function( .mm ) fetch.FE( .mm ) )
 dur.fixef_nFE <- sapply( X = dur.fixef_trials, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
 dur.fixef_nRE <- sapply( X = dur.fixef_trials, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
 
 dur.fixef_selection <- data.frame( Model = names( dur.fixef_trials ), 
-                                   RE = dur.fixef_REs, 
+                                   FE = dur.fixef_FEs, 
                                    AICc = dur.fixef_aicc, 
                                    DeltaAICc = dur.fixef_delt, 
                                    AWt = dur.fixef_wgts, 
                                    nFE = dur.fixef_nFE, 
                                    nRE = dur.fixef_nRE )[ order( dur.fixef_delt ), ]
 
+dur.mod_aicc <- update( dur.fixef_trials[[ "nag_tdf" ]] )
 
 ```
 
@@ -1385,7 +1441,7 @@ dur.test <- augment( dur.mod ) %>%
           Mins = exp( tMins ), 
           .mu = exp( .fitted ), 
           .std.resid = std.resid.glmer( dur.mod ), 
-          .hat = hatvalues( dur.fixef ) ) %>% 
+          .hat = hatvalues( dur.mod ) ) %>% 
   dplyr::select( -.rownames )
 ests <- influence.ME::influence( dur.mod, obs = TRUE )
 dur.test$.cooksd <- cooks.distance( ests )[ which( !is.na( fullBouts$NestAge ) ) ]
@@ -1447,6 +1503,8 @@ lev_dur <- ggplot( data = dur.test,
         size = expression( "Cook's distance" ) ) +
   theme( legend.position = "bottom" )
 
+cowplot::plot_grid( rVf_dur, qq_dur, sl_dur, lev_dur, nrow = 2, labels = "AUTO" )
+
 ```
 
 ```{r DURcheckR}
@@ -1501,6 +1559,237 @@ fVo <- cowplot::plot_grid( NULL, dur_fVo, NULL, ncol = 1, rel_heights = c( 1, 2,
 cowplot::plot_grid( rVs, fVo, nrow = 1, rel_widths = c( 2, 1 ) )
 
 ```
+
+```{r DURpredictRnestAge}
+
+dur.predict_na <- expand.grid( NestAge = ( 0:28 - mean( fullBouts$NestAge, na.rm = TRUE ) ) / sd( fullBouts$NestAge, na.rm = TRUE ), 
+                               TempDiff = 0, 
+                               Turbine_within_1km = c( FALSE, TRUE ), 
+                               Roads_Distance_m = 0 )
+
+dur.predict_na <- dur.predict_na %>%
+  mutate( .fitted = predict( dur.mod, 
+                             newdata = dur.predict_na, re.form = ~0, 
+                             type = "response" ), 
+          NestAge_r = ( NestAge * sd( fullBouts$NestAge, na.rm = TRUE ) ) + mean( fullBouts$NestAge, na.rm = TRUE ), 
+          TempDiff_r = mean( fullBouts$TempDiff, na.rm = TRUE ), 
+          Roads_Distance_m_r = mean( fullBouts$Roads_Distance_m, na.rm = TRUE ), 
+          .mu = exp( .fitted ) )
+
+dur.predict_na.plot <- ggplot( data = dur.predict_na, 
+                               aes( x = NestAge_r, 
+                                    y = .mu, 
+                                    linetype = Turbine_within_1km ) ) + 
+  geom_line() + 
+  theme_classic() + 
+  labs( x = "Nest age (d)", 
+        y = "Off-bout duration (min)", 
+        linetype = expression( "Distance to nearest\nwind turbine" ) ) + 
+  scale_linetype( limits = c( "TRUE", "FALSE" ), 
+                  labels = c( "FALSE" = ">1 km", 
+                              "TRUE" = "≤1 km" ) )
+
+dur.predict_na.plot
+
+```
+
+```{r DURpredictRtempDiff}
+
+dur.predict_td <- expand.grid( NestAge = ( 14 - mean( fullBouts$NestAge, na.rm = TRUE ) ) / sd( fullBouts$NestAge, na.rm = TRUE ), 
+                               TempDiff = ( seq( from = 0, # floor( min( fullBouts$TempDiff, na.rm = TRUE ) ), 
+                                                 to = ceiling( max( fullBouts$TempDiff, na.rm = TRUE ) ), 
+                                                 by = 0.5 ) - mean( fullBouts$TempDiff, na.rm = TRUE ) ) / sd( fullBouts$TempDiff, na.rm = TRUE ), 
+                               Turbine_within_1km = c( FALSE, TRUE ), 
+                               Roads_Distance_m = 0 )
+
+dur.predict_td <- dur.predict_td %>%
+  mutate( .fitted = predict( dur.mod, 
+                             newdata = dur.predict_td, re.form = ~0, 
+                             type = "response" ), 
+          NestAge_r = ( NestAge * sd( fullBouts$NestAge, na.rm = TRUE ) ) + mean( fullBouts$NestAge, na.rm = TRUE ), 
+          TempDiff_r = ( TempDiff * sd( fullBouts$TempDiff, na.rm = TRUE ) ) + mean( fullBouts$TempDiff, na.rm = TRUE ), 
+          Roads_Distance_m_r = mean( fullBouts$Roads_Distance_m, na.rm = TRUE ), 
+          .mu = exp( .fitted ) )
+
+dur.predict_td.plot <- ggplot( data = dur.predict_td, 
+                               aes( x = TempDiff_r, 
+                                    y = .mu, 
+                                    linetype = Turbine_within_1km ) ) + 
+  geom_line() + 
+  theme_classic() + 
+  labs( x = "Temperature difference (°C)", 
+        y = "Off-bout duration (min)", 
+        linetype = expression( "Distance to nearest\nwind turbine" ) ) + 
+  scale_linetype( limits = c( "TRUE", "FALSE" ), 
+                  labels = c( "FALSE" = ">1 km", 
+                              "TRUE" = "≤1 km" ) )
+
+dur.predict_td.plot
+
+```
+
+-----
+
+```{r DURvalidatRtrial}
+
+dur.test_aicc <- augment( dur.mod_aicc ) %>% 
+  mutate( NestAge = round( ( NestAge * sd( fullBouts$NestAge, na.rm = TRUE ) ) + mean( fullBouts$NestAge, na.rm = TRUE ), digits = 0 ), 
+          TempDiff = ( TempDiff * sd( fullBouts$TempDiff, na.rm = TRUE ) ) + mean( fullBouts$TempDiff, na.rm = TRUE ), 
+          Mins = exp( tMins ), 
+          .mu = exp( .fitted ), 
+          .std.resid = std.resid.glmer( dur.mod_aicc ), 
+          .hat = hatvalues( dur.mod_aicc ) ) %>% 
+  dplyr::select( -.rownames )
+ests <- influence.ME::influence( dur.mod_aicc, obs = TRUE )
+dur.test_aicc$.cooksd <- cooks.distance( ests )[ which( !is.na( fullBouts$NestAge ) ) ]
+
+rVf_dur_aicc <- ggplot( data = dur.test_aicc, 
+                        aes( x = .fitted, 
+                             y = .resid ) ) + 
+  geom_smooth( colour = "seashell4" ) + 
+  geom_hline( yintercept = 0, 
+              linetype = "dashed" ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Fitted values", 
+        y = "Residuals" ) + 
+  theme( text = element_text( size = 12 ) )
+
+y <- quantile( x = dur.test_aicc$.std.resid, probs = c( 0.25, 0.75 ) )
+x <- qnorm( p = c( 0.25, 0.75 ) )
+slope <- diff( y ) / diff( x )
+int <- y[ 1L ] - ( slope * x[ 1L ] )
+
+qq_dur_aicc <- ggplot( data = dur.test_aicc, 
+                       aes( sample = .std.resid ) ) + 
+  geom_abline( slope = slope, 
+               intercept = int, 
+               colour = "tomato" ) + 
+  stat_qq( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Theoretical quantiles", 
+        y = "Standardized residuals" ) + 
+  theme( text = element_text( size = 12 ) )
+
+sl_dur_aicc <- ggplot( data = dur.test_aicc, 
+                       aes( x = .fitted, 
+                            y = sqrt( abs( .std.resid ) ) ) ) + 
+  geom_smooth( colour = "seashell4" ) + 
+  geom_hline( yintercept = 1, 
+              linetype = "dashed" ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Fitted values", 
+        y = "√|Standardized residuals|" ) + 
+  theme( text = element_text( size = 12 ) )
+
+lev_dur_aicc <- ggplot( data = dur.test_aicc, 
+                        aes( x = .hat, 
+                             y = .std.resid, 
+                             size = .cooksd ) ) + 
+  geom_hline( yintercept = 0,
+              size = 1,
+              colour = "grey" ) +
+  geom_vline( xintercept = 0,
+              size = 1,
+              colour = "grey" ) +
+  geom_point() +
+  theme_classic() +
+  labs( x = "Leverage",
+        y = "Standardized residuals",
+        size = expression( "Cook's distance" ) ) +
+  theme( legend.position = "bottom" )
+
+cowplot::plot_grid( rVf_dur_aicc, qq_dur_aicc, sl_dur_aicc, lev_dur_aicc, nrow = 2, labels = "AUTO" )
+
+```
+
+```{r DURcheckR}
+
+rVna_aicc <- ggplot( data = dur.test_aicc, 
+                     aes( x = NestAge, 
+                          y = .resid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Nest age (d)", 
+        y = "Residuals" )
+
+rVtd_aicc <- ggplot( data = dur.test_aicc, 
+                     aes( x = TempDiff, 
+                          y = .resid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Temperature difference (°C)", 
+        y = "Residuals" )
+
+dur_fVo_aicc <- ggplot( data = dur.test_aicc, 
+                        aes( x = Mins, 
+                             y = .mu ) ) + 
+  geom_abline( slope = 1, 
+               intercept = 0 ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Observed off-bout duration (min)", 
+        y = "Predicted off-bout duration (min)" )
+
+rVs <- cowplot::plot_grid( rVna_aicc, rVtd_aicc, nrow = 2, labels = "AUTO" )
+fVo <- cowplot::plot_grid( NULL, dur_fVo_aicc, NULL, ncol = 1, rel_heights = c( 1, 2, 1 ), labels = c( "", "C", "" ) )
+cowplot::plot_grid( rVs, fVo, nrow = 1, rel_widths = c( 2, 1 ) )
+
+```
+
+```{r DURpredictRnestAge}
+
+dur.predict_aicc.na <- expand.grid( NestAge = ( 0:28 - mean( fullBouts$NestAge, na.rm = TRUE ) ) / sd( fullBouts$NestAge, na.rm = TRUE ), 
+                                    TempDiff = 0 )
+
+dur.predict_aicc.na <- dur.predict_aicc.na %>%
+  mutate( .fitted = predict( dur.mod_aicc, 
+                             newdata = dur.predict_aicc.na, re.form = ~0, 
+                             type = "response" ), 
+          NestAge_r = ( NestAge * sd( fullBouts$NestAge, na.rm = TRUE ) ) + mean( fullBouts$NestAge, na.rm = TRUE ), 
+          TempDiff_r = mean( fullBouts$TempDiff, na.rm = TRUE ), 
+          .mu = exp( .fitted ) )
+
+dur.predict_aicc.na.plot <- ggplot( data = dur.predict_aicc.na, 
+                                    aes( x = NestAge_r, 
+                                         y = .mu ) ) + 
+  geom_line() + 
+  theme_classic() + 
+  labs( x = "Nest age (d)", 
+        y = "Off-bout duration (min)" )
+
+dur.predict_aicc.na.plot
+
+```
+
+```{r DURpredictRtempDiff}
+
+dur.predict_aicc.td <- expand.grid( NestAge = ( 14 - mean( fullBouts$NestAge, na.rm = TRUE ) ) / sd( fullBouts$NestAge, na.rm = TRUE ), 
+                                    TempDiff = ( seq( from = 0, # floor( min( fullBouts$TempDiff, na.rm = TRUE ) ), 
+                                                      to = ceiling( max( fullBouts$TempDiff, na.rm = TRUE ) ), 
+                                                      by = 0.5 ) - mean( fullBouts$TempDiff, na.rm = TRUE ) ) / sd( fullBouts$TempDiff, na.rm = TRUE ) )
+
+dur.predict_aicc.td <- dur.predict_aicc.td %>%
+  mutate( .fitted = predict( dur.mod_aicc, 
+                             newdata = dur.predict_aicc.td, re.form = ~0, 
+                             type = "response" ), 
+          NestAge_r = ( NestAge * sd( fullBouts$NestAge, na.rm = TRUE ) ) + mean( fullBouts$NestAge, na.rm = TRUE ), 
+          TempDiff_r = ( TempDiff * sd( fullBouts$TempDiff, na.rm = TRUE ) ) + mean( fullBouts$TempDiff, na.rm = TRUE ), 
+          .mu = exp( .fitted ) )
+
+dur.predict_aicc.td.plot <- ggplot( data = dur.predict_aicc.td, 
+                                    aes( x = TempDiff_r, 
+                                         y = .mu ) ) + 
+  geom_line() + 
+  theme_classic() + 
+  labs( x = "Temperature difference (°C)", 
+        y = "Off-bout duration (min)" )
+
+dur.predict_aicc.td.plot
+
+```
+
 
 ###**RESULTS** {#results}
 
