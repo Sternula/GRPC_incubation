@@ -369,7 +369,7 @@ nests <- bouts %>%
 # Add geographic information to nest data. Create a categorical variable indicating whether or not a turbine exists within 1km of the nest.
 nestPos <- read.csv( "data/NestDistance.csv", stringsAsFactors = FALSE )
 nests <- inner_join( nestPos, nests, by = c( "Nest" = "id" ) ) %>% 
-  mutate( Turbine_within_1km = Turbine_Distance_m <= 1000 )
+  mutate( Turbine_within_1km = as.factor( Turbine_Distance_m <= 1000 ) )
 
 # Add vegetation information to nest data.
 nestVeg <- read.csv( "data/NestVeg.csv", na.strings = "N/A", stringsAsFactors = FALSE ) %>% 
@@ -746,6 +746,162 @@ monthTemps <- weatherSun %>%
 
 ```
 
+```{r tRends, eval = FALSE, include = FALSE}
+
+######### Explore the data, looking for potential trends. #########
+
+####### Bout duration vs. distance-to-XXX. #######
+
+##### TURBINES #####
+# By individual bout. Certainly a decrease in spread with distance, and a fitted-line decline, but hard to tell without the smoothed line.
+allBouts.tb <- ggplot( arrange( fullBouts, Turbine_Distance_m ), 
+                       aes( x = Turbine_Distance_m, 
+                            y = Mins ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  geom_smooth( colour = "grey24" ) +
+  theme_classic() + 
+  labs( x = "Distance to nearest wind turbine (m)", 
+        y = "Off-bout duration (min)" )
+
+# By average bout duration / nest. Decline in duration with distance is more evident; but many fewer datapoints.
+meanBouts.tb <- ggplot( arrange( nests, Turbine_Distance_m ), 
+                        aes( x = Turbine_Distance_m, 
+                             y = MeanMins_bout ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  #geom_smooth( colour = "grey24" ) + 
+  theme_classic() + 
+  labs( x = "Distance to nearest wind turbine (m)", 
+        y = "Mean off-bout duration (min)" )
+
+##### ROADS #####
+# By individual bout. Fairly flat---with an ever-so-slight increase in duration with distance.
+allBouts.rd <- ggplot( arrange( fullBouts, Roads_Distance_m ), 
+                       aes( x = Roads_Distance_m, 
+                            y = Mins ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  geom_smooth( colour = "grey24" ) +
+  theme_classic() + 
+  labs( x = "Distance to nearest road (m)", 
+        y = "Off-bout duration (min)" )
+
+# By average bout duration / nest. Noise. Meh.
+meanBouts.rd <- ggplot( arrange( nests, Roads_Distance_m ), 
+                        aes( x = Roads_Distance_m, 
+                             y = MeanMins_bout ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  geom_smooth( colour = "grey24" ) +
+  theme_classic() + 
+  labs( x = "Distance to nearest road (m)", 
+        y = "Mean off-bout duration (min)" )
+
+##### WATER #####
+# By individual bout. Similar to roads, with a bump--in the road.
+allBouts.h2o <- ggplot( arrange( fullBouts, Water_Distance_m ), 
+                        aes( x = Water_Distance_m, 
+                             y = Mins ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  geom_smooth( colour = "grey24" ) +
+  theme_classic() + 
+  labs( x = "Distance to nearest water source (m)", 
+        y = "Off-bout duration (min)" )
+
+# By average bout duration / nest.
+meanBouts.h2o <- ggplot( arrange( nests, Water_Distance_m ), 
+                     aes( x = Water_Distance_m, 
+                          y = MeanMins_bout ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  geom_smooth( colour = "grey24" ) +
+  theme_classic() + 
+  labs( x = "Distance to nearest water source (m)", 
+        y = "Mean off-bout duration (min)" )
+
+##### TREES #####
+# By individual bout.
+allBouts.tr <- ggplot( arrange( fullBouts, Water_Distance_m ), 
+                       aes( x = Water_Distance_m, 
+                            y = Mins ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  geom_smooth( colour = "grey24" ) +
+  theme_classic() + 
+  labs( x = "Distance to nearest tree (m)", 
+        y = "Off-bout duration (min)" )
+
+# By average bout duration / nest.
+meanBouts.tr <- ggplot( arrange( nests, Water_Distance_m ), 
+                        aes( x = Water_Distance_m, 
+                             y = MeanMins_bout ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  #geom_smooth( colour = "grey24" ) + 
+  theme_classic() + 
+  labs( x = "Distance to nearest tree (m)", 
+        y = "Mean off-bout duration (min)" )
+
+####### Bout duration vs. temperature difference. #######
+
+tdiff <- ggplot( arrange( fullBouts, TempDiff ), 
+                 aes( x = TempDiff, 
+                      y = Mins ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  geom_smooth( method = "lm", 
+               se = FALSE, 
+               aes( group = id, 
+                    colour = id ) ) + 
+  theme_classic() + 
+  labs( x = "Temperature difference (°C)", 
+        y = "Off-bout duration (min)" )
+
+####### Bout duration vs. time. #######
+
+##### ORDINAL DATE #####
+oday <- ggplot( arrange( fullBouts, Jday ), 
+                aes( x = Jday, 
+                     y = Mins ) ) + 
+  geom_smooth( method = "lm", 
+               se = FALSE, 
+               aes( group = id, 
+                    colour = id ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Ordinal date", 
+        y = "Off-bout duration (min)" )
+
+##### TIME OF DAY #####
+tday <- ggplot( arrange( fullBouts, EventStart_dl ), 
+                aes( x = EventStart_dl, 
+                     y = Mins ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Time", 
+        y = "Off-bout duration (min)" ) + 
+  facet_wrap( ~id )
+
+##### NEST AGE #####
+nage <- ggplot( arrange( fullBouts, NestAge ), 
+                aes( x = NestAge, 
+                     y = Mins ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  geom_smooth( method = "lm", 
+               se = FALSE, 
+               aes( group = id, 
+                    colour = id ) ) + 
+  geom_smooth( method = "lm" ) + 
+  labs( x = "Nest age (d)", 
+        y = "Off-bout duration (min)" )
+
+####### Bout duration vs. hen incubation habits. #######
+tmo <- ggplot( arrange( fullBouts, MeanBouts ), 
+               aes( x = MeanBouts, 
+                    y = Mins ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Mean number of bouts taken per day of incubation", 
+        y = "Off-bout duration (min)" )
+
+####### End Explore. #######
+
+```
+
 ###**ABSTRACT** {#abstract}
 
 ###**KEY WORDS** {#keywords}
@@ -1042,6 +1198,87 @@ print( brownMap, vp = v3 )
 
 ####**Statistical Analyses** {#statisticalmethods}
 
+```{r nestRsuccess}
+
+ns.mod_day <- glm( Nest_Success ~ MeanMins_day + Turbine_within_1km, data = nests, family = "binomial" )
+ns.mod_bout <- glm( Nest_Success ~ MeanMins_bout + Turbine_within_1km, data = nests, family = "binomial" )
+
+```
+
+-----
+
+```{r DURlm}
+
+bcMminTransform <- boxcox( MeanMins_day ~ Turbine_Distance_m + Roads_Distance_m + Nest_Success + VOR_AVG + yday( startDate ), 
+                           data = nests, 
+                           plotit = FALSE )
+lMmin_est <- bcMminTransform$x[ which.max( bcMminTransform$y ) ]
+nests$tMeanMins_day <- ifelse( test = rep( lMmin_est != 0, length( nests$MeanMins_day ) ), 
+                               yes = nests$MeanMins_day^( -2 ), 
+                               n = log( nests$MeanMins_day))
+
+
+dur.lm_mods <- list( int = tMeanMins_day ~ 1, 
+                     tbd = tMeanMins_day ~ Turbine_Distance_m, 
+                     rdd = tMeanMins_day ~ Roads_Distance_m, 
+                     nsx = tMeanMins_day ~ Nest_Success, 
+                     vor = tMeanMins_day ~ VOR_AVG, 
+                     std = tMeanMins_day ~ startDate, 
+                     dist = tMeanMins_day ~ Turbine_Distance_m + Roads_Distance_m, 
+                     envr = tMeanMins_day ~ Turbine_Distance_m + Roads_Distance_m + VOR_AVG, 
+                     nest = tMeanMins_day ~ Nest_Success + startDate, 
+                     nostd = tMeanMins_day ~ Turbine_Distance_m + Roads_Distance_m + Nest_Success + VOR_AVG, 
+                     global = tMeanMins_day ~ Turbine_Distance_m + Roads_Distance_m + Nest_Success + VOR_AVG + startDate )
+
+dur.lm_fits <- lapply( X = dur.lm_mods, 
+                       FUN = function( .ff ) lm( .ff, data = nests ) )
+
+dur.lm_forms <- gsub( pattern = "\\s{2,}", 
+                      replacement = " ", 
+                      x = sapply( X = sapply( X = dur.lm_mods, FUN = function( .ff ) deparse( .ff[[ 3 ]] ) ), 
+                                  FUN = function( .ff ) paste( .ff, collapse = "" ) ) )
+dur.lm_aicc <- sapply( X = dur.lm_fits, FUN = AICc )
+dur.lm_delt <- dur.lm_aicc- min( dur.lm_aicc )
+dur.lm_Awgt <- exp( -0.5 * dur.lm_delt )
+dur.lm_Awgt <- dur.lm_Awgt / sum( dur.lm_Awgt )
+dur.lm_K <- sapply( X = dur.lm_fits, FUN = function( .mm ) length( .mm$coefficients ) )
+
+dur.lm_selection <- data.frame( Model = dur.lm_forms,  
+                                AICc = dur.lm_aicc, 
+                                DAICc = dur.lm_delt, 
+                                Awgt = dur.lm_Awgt, 
+                                K = dur.lm_K )[ order( dur.lm_delt ), ]
+
+dur.lm_test <- augment( dur.lm_fits[[ "global" ]] )
+
+rVf_dur.lm <- ggplot( dur.lm_test, aes( x = .fitted, y = .resid ) ) + 
+  geom_hline( yintercept = 0, linetype = "dashed" ) + geom_smooth( colour = "grey24" ) + 
+  geom_point() + theme_classic() + labs( x = "Fitted values", y = "Residuals" )
+
+y <- quantile( x = dur.lm_test$.std.resid, probs = c( 0.25, 0.75 ) )
+x <- qnorm( p = c( 0.25, 0.75 ) )
+slope <- diff( y ) / diff( x )
+int = y[ 1L ] - ( slope * x[ 1L ] )
+
+qq_dur.lm <- ggplot( dur.lm_test, aes( sample = .std.resid ) ) + 
+  geom_qq() + geom_abline( slope = slope, intercept = int, colour = "tomato2" ) + 
+  theme_classic() + labs( x = "Theoretical quantiles", y = "Standardized residuals" )
+
+sl_dur.lm <- ggplot( dur.lm_test, aes( .fitted, sqrt( abs( .std.resid ) ) ) ) + 
+  geom_hline( yintercept = 1, linetype = "dashed" ) + geom_smooth( colour = "grey24" ) + 
+  geom_point() + theme_classic() + labs( x = "Fitted values", y = "√|Standardized residuals|" )
+
+lev_dur.lm <- ggplot( dur.lm_test, aes( .hat, .std.resid, size = .cooksd ) ) + 
+  geom_hline( yintercept = 0, colour = "grey" ) + geom_vline( xintercept = 0, colour = "grey" ) + 
+  geom_point() + theme_classic() + labs( x = "Leverage", y = "Standardized residuals", size = "Cook's distance" ) + 
+  theme( legend.position = "bottom" ) 
+
+cowplot::plot_grid( rVf_dur.lm, qq_dur.lm, sl_dur.lm, lev_dur.lm, nrow = 2, labels = "AUTO" )
+
+```
+
+-----
+
 ```{r exploRe, eval = FALSE}
 
 #### Transformations. ####
@@ -1105,7 +1342,13 @@ hiScorrs <- data.frame( which( abs( scorMat ) >= 0.5, arr.ind = TRUE ) ) %>%
 
 ```{r coRrs}
 
-intVars <- c( "NestAge", "AmbientTemp", "TempDiff", "VOR_AVG", "Roads_Distance_m", "Water_Distance_m", "Jday" )
+intVars <- c( "Nest age" = "NestAge", 
+              "Temperature difference" = "TempDiff", 
+              "Vapor pressure deficit" = "VPD", 
+              "VOR" = "VOR_AVG", 
+              "Distance to nearest road" = "Roads_Distance_m", 
+              "Distance to nearest water source" = "Water_Distance_m", 
+              "Ordinal date" = "Jday" )
 
 var.corrs <- data.frame( t( combn( x = intVars, m = 2 ) ), stringsAsFactors = FALSE )
 
@@ -1128,6 +1371,22 @@ var.corrs <- var.corrs %>%
           PearsonP = sapply( Pcorrs, function( .htest ) .htest$p.value ), 
           SpearmanR = sapply( Scorrs, function( .htest ) .htest$estimate ), 
           SpearmanP = sapply( Scorrs, function( .htest ) .htest$p.value ) )
+
+corrs.table <- var.corrs %>% 
+  dplyr::select( -starts_with( "Pearson" ) ) %>% 
+  mutate( X1 = sapply( X = X1, FUN = function( .nn ) names( intVars )[ intVars %in% .nn ] ), 
+          X2 = sapply( X = X2, FUN = function( .nn ) names( intVars )[ intVars %in% .nn ] ), 
+          SpearmanP = sapply( X = SpearmanP, FUN = function( .pp ) ifelse( .pp < 0.0001, "**<0.0001**", 
+                                                                           ifelse( .pp < 0.001, "**<0.001**", 
+                                                                                   ifelse( .pp < 0.01, "**<0.01**", 
+                                                                                           ifelse( .pp < 0.05, paste( "**", round( .pp, 3 ), "**", sep = "" ), 
+                                                                                                   as.character( round( .pp, 3 ) ) ) ) ) ) ) )
+
+knitr::kable( x = corrs.table, 
+              format = "pandoc", 
+              digits = 3, 
+              col.names = c( "", "", "Spearman's $\\rho$", "*p*" ), 
+              caption = "Spearman's rank correlation coefficients for all covariates considered for inclusion in the models. We calculated estimates for Spearman's $\\rho$ using an asymptotic *t* approximation.")
 
 ```
 
@@ -1288,57 +1547,6 @@ dur.ranef_selection.abbrev <- dur.ranef_selection %>%
 # Top-ranked model (by Delta AICc) has the following random-effects structure: (1 | fID) + (NestAge * TempDiff - 1 | fID)
 # Contenders have Delta AICc 0.497 (NestAge * TempDiff | fID), 2.123 (1 | fID) + (NestAge - 1 | fID), 3.204 (NestAge | fID), 7.313 (1 | fID) + (Jday - 1 | fID)...
 dur.ranef_topMod <- dur.ranef_fit[[ which.min( dur.ranef_delta ) ]]
-
-```
-
-```{r DURfixefAICcTrials}
-
-dur.fixef_forms <- list( int = tMins ~ 1 + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         fyr = tMins ~ fYear + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         nag = tMins ~ NestAge + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         tdf = tMins ~ TempDiff + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         vor = tMins ~ VOR_AVG + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         t1k = tMins ~ Turbine_within_1km + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         rdd = tMins ~ Roads_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         h2o = tMins ~ Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         jdy = tMins ~ Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         nag.tdf = tMins ~ NestAge * TempDiff + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         h2o.jdy = tMins ~ Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         nag_tdf = tMins ~ NestAge + TempDiff + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         h2o_jdy = tMins ~ Water_Distance_m + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         nt_t_hj = tMins ~ NestAge * TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         nt_t_h.j = tMins ~ NestAge * TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         nt_t_h = tMins ~ NestAge * TempDiff + Turbine_within_1km + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         nt_t_j = tMins ~ NestAge * TempDiff + Turbine_within_1km + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         n.t_t_hm = tMins ~ NestAge + TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         t_t_hm = tMins ~ TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         n_t_hm = tMins ~ NestAge + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         n.t_t_h.j = tMins ~ NestAge + TempDiff + Turbine_within_1km + Water_Distance_m + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
-                         global = tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ) )
-
-dur.fixef_trials <- lapply( X = dur.fixef_forms, 
-                            FUN = function( .ff ) lmer( .ff, 
-                                                        data = csfullBouts, 
-                                                        control = lmerControl( optimizer = "bobyqa", optCtrl = list( maxfun = 2e4 ) ), 
-                                                        REML = FALSE ) )
-
-dur.fixef_aicc <- sapply( X = dur.fixef_trials, FUN = AICc )
-dur.fixef_delt <- dur.fixef_aicc - min( dur.fixef_aicc )
-dur.fixef_wgts <- exp( -0.5 * dur.fixef_delt )
-dur.fixef_wgts <- dur.fixef_wgts / sum( dur.fixef_wgts )
-dur.fixef_FEs <- sapply( X = dur.fixef_trials, FUN = function( .mm ) fetch.FE( .mm ) )
-dur.fixef_nFE <- sapply( X = dur.fixef_trials, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
-dur.fixef_nRE <- sapply( X = dur.fixef_trials, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
-
-dur.fixef_selection <- data.frame( Model = names( dur.fixef_trials ), 
-                                   FE = dur.fixef_FEs, 
-                                   AICc = dur.fixef_aicc, 
-                                   DeltaAICc = dur.fixef_delt, 
-                                   AWt = dur.fixef_wgts, 
-                                   nFE = dur.fixef_nFE, 
-                                   nRE = dur.fixef_nRE )[ order( dur.fixef_delt ), ]
-
-dur.mod_aicc <- update( dur.fixef_trials[[ "nag_tdf" ]] )
 
 ```
 
@@ -1630,6 +1838,57 @@ dur.predict_td.plot
 
 -----
 
+```{r DURfixefAICcTrials}
+
+dur.fixef_forms <- list( int = tMins ~ 1 + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         fyr = tMins ~ fYear + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nag = tMins ~ NestAge + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         tdf = tMins ~ TempDiff + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         vor = tMins ~ VOR_AVG + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         t1k = tMins ~ Turbine_within_1km + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         rdd = tMins ~ Roads_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         h2o = tMins ~ Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         jdy = tMins ~ Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nag.tdf = tMins ~ NestAge * TempDiff + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         h2o.jdy = tMins ~ Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nag_tdf = tMins ~ NestAge + TempDiff + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         h2o_jdy = tMins ~ Water_Distance_m + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nt_t_hj = tMins ~ NestAge * TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nt_t_h.j = tMins ~ NestAge * TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nt_t_h = tMins ~ NestAge * TempDiff + Turbine_within_1km + Water_Distance_m + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         nt_t_j = tMins ~ NestAge * TempDiff + Turbine_within_1km + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         n.t_t_hm = tMins ~ NestAge + TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         t_t_hm = tMins ~ TempDiff + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         n_t_hm = tMins ~ NestAge + Turbine_within_1km + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         n.t_t_h.j = tMins ~ NestAge + TempDiff + Turbine_within_1km + Water_Distance_m + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
+                         global = tMins ~ fYear + NestAge * TempDiff + VOR_AVG + Turbine_within_1km + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ) )
+
+dur.fixef_trials <- lapply( X = dur.fixef_forms, 
+                            FUN = function( .ff ) lmer( .ff, 
+                                                        data = csfullBouts, 
+                                                        control = lmerControl( optimizer = "bobyqa", optCtrl = list( maxfun = 2e4 ) ), 
+                                                        REML = FALSE ) )
+
+dur.fixef_aicc <- sapply( X = dur.fixef_trials, FUN = AICc )
+dur.fixef_delt <- dur.fixef_aicc - min( dur.fixef_aicc )
+dur.fixef_wgts <- exp( -0.5 * dur.fixef_delt )
+dur.fixef_wgts <- dur.fixef_wgts / sum( dur.fixef_wgts )
+dur.fixef_FEs <- sapply( X = dur.fixef_trials, FUN = function( .mm ) fetch.FE( .mm ) )
+dur.fixef_nFE <- sapply( X = dur.fixef_trials, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
+dur.fixef_nRE <- sapply( X = dur.fixef_trials, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
+
+dur.fixef_selection <- data.frame( Model = names( dur.fixef_trials ), 
+                                   FE = dur.fixef_FEs, 
+                                   AICc = dur.fixef_aicc, 
+                                   DeltaAICc = dur.fixef_delt, 
+                                   AWt = dur.fixef_wgts, 
+                                   nFE = dur.fixef_nFE, 
+                                   nRE = dur.fixef_nRE )[ order( dur.fixef_delt ), ]
+
+dur.mod_aicc <- update( dur.fixef_trials[[ "nag_tdf" ]] )
+
+```
+
 ```{r DURvalidatRtrial}
 
 dur.test_aicc <- augment( dur.mod_aicc ) %>% 
@@ -1704,7 +1963,7 @@ cowplot::plot_grid( rVf_dur_aicc, qq_dur_aicc, sl_dur_aicc, lev_dur_aicc, nrow =
 
 ```
 
-```{r DURcheckR}
+```{r DURcheckRtrial}
 
 rVna_aicc <- ggplot( data = dur.test_aicc, 
                      aes( x = NestAge, 
@@ -1738,7 +1997,7 @@ cowplot::plot_grid( rVs, fVo, nrow = 1, rel_widths = c( 2, 1 ) )
 
 ```
 
-```{r DURpredictRnestAge}
+```{r DURpredictRnestAgeTrial}
 
 dur.predict_aicc.na <- expand.grid( NestAge = ( 0:28 - mean( fullBouts$NestAge, na.rm = TRUE ) ) / sd( fullBouts$NestAge, na.rm = TRUE ), 
                                     TempDiff = 0 )
@@ -1763,7 +2022,7 @@ dur.predict_aicc.na.plot
 
 ```
 
-```{r DURpredictRtempDiff}
+```{r DURpredictRtempDiffTrial}
 
 dur.predict_aicc.td <- expand.grid( NestAge = ( 14 - mean( fullBouts$NestAge, na.rm = TRUE ) ) / sd( fullBouts$NestAge, na.rm = TRUE ), 
                                     TempDiff = ( seq( from = 0, # floor( min( fullBouts$TempDiff, na.rm = TRUE ) ), 
@@ -1803,6 +2062,8 @@ dur.predict_aicc.td.plot
 # --includes
 # ----quantitative presentation of results
 # ----parallels presentation in methods
+
+# --# obs/group, etc.
 ```
 
 ###**DISCUSSION** {#discussion}
