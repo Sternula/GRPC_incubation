@@ -260,6 +260,18 @@ tidy_w_name <- function( .m, .n ){
   df
 }
 
+# From stamod::qres.binom, adapted for .glmerMod objects
+qres2 <- function( .glmm ){
+  p <- fitted( .glmm )
+  y <- .glmm@resp$y
+  n <- .glmm@resp$n
+  y <- n * y
+  a <- pbinom( y - 1, n, p )
+  b <- pbinom( y, n, p )
+  u <- runif( n = length( y ), min = a, max = b )
+  qnorm( u )
+}
+
 ```
 
 ```{r impoRt}
@@ -794,21 +806,39 @@ incRange <- ggplot( data = nests,
 ```{r fReqManipulatoR}
 
 # Define the size of the timeblocks.
-blockSize <- duration( 3, "hours" )
+blockSize <- duration( .b <- 3, "hours" )
+
+timeRounder <- function( .POSIX, .blkSz = 3, .ud = c( "floor", "ceiling" ) ){
+  .hvec <- seq( 6 - ( .blkSz / 2 ), 0, by = -.blkSz )
+  .hvec <- seq( .hvec[ length( .hvec ) ], 24, by = .blkSz )
+  .m <- minute( .POSIX ) / 60
+  .h <- hour( .POSIX ) + .m
+  .btw <- rep( .hvec[ abs( .hvec - .h ) < .blkSz ], length = 2 )
+  .ud <- match.arg( .ud, c( "floor", "ceiling" ) )
+  .h <- switch( .ud, 
+                "floor" = .btw[ 1 ], 
+                "ceiling" = .btw[ 2 ] )
+  hour( .POSIX ) <- .fh <- floor( .h )
+  .m <- ( .h - .fh ) * 60
+  minute( .POSIX ) <- .m
+  second( .POSIX ) <- 0
+  .POSIX
+}
 
 # Extract the earliest and latest recorded off-bout initiation times for each nest. Create a sequence of timeblocks for each nest from 01:30:00 on the date of the first recorded off-bout through 01:29:59 on the day after the last recorded off-bout.
+
 freqData <- plyr::ddply( .data = fullBouts, 
                          .variables = "id", 
                          .fun = function( .df ){
                            
                            .id <- unique( .df$id )                       # for each nest,
                            
-                           .start <- min( .df$EventStart )               # record starts on date of first iButton off-bout record
-                           .end <- max( .df$EventStart )                 # and ends on the date after the last record
-                           hour( .start ) <- 1
-                           hour( .end ) <- 22
-                           minute( .start ) <- minute( .end ) <- 30      # always going from 01:30:00 am
-                           second( .start ) <- second( .end ) <- 0       # until 01:29:59 am
+                           .start <- filter( nests, NestID == .id )      # record starts on date of first iButton off-bout record
+                           .start <- parse_date_time( x = paste( .start$measDate, .start$Time ), 
+                                                      order = c( "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S" ), 
+                                                      tz = "America/Chicago" )
+                           .start <- timeRounder( .start, .b, "ceiling" )
+                           .end <- timeRounder( max( .df$EventStart ), .b, "floor" )                # and ends on the date after the last record
                            .starts <- seq( from = .start, 
                                            to = .end, 
                                            by = blockSize )
@@ -842,14 +872,16 @@ freqData <- plyr::ddply( .data = fullBouts,
                                        AirPressure = .pressure, 
                                        Precipitation = .precip, 
                                        VPD = .vpd ) } ) %>% 
-  mutate( fYear = as.factor( year( blockStart ) ), 
+  mutate( fID = as.factor( id ), 
+          fYear = as.factor( year( blockStart ) ), 
           Jday = yday( blockStart ), 
           Date = ymd( date( blockStart ), tz = "America/Chicago" ) ) %>% 
-  left_join( y = dplyr::select( fullBouts, 
-                                id, NestAge, VOR_AVG, 
-                                contains( "Distance", ignore.case = TRUE ), 
-                                contains( "Date", ignore.case = TRUE ), Nest_Success ), 
-             by = c( "id", "Date" ) )
+  left_join( y = dplyr::select( dayBouts,
+                                id, Date, NestAge ),
+             by = c( "id", "Date" ) ) %>% 
+  left_join( y = dplyr::select( nests, 
+                                NestID, contains( "Distance", ignore.case = TRUE ), Nest_Success, VOR_AVG ), 
+             by = c( "id" = "NestID" ) )
 
 ```
 
@@ -1045,6 +1077,9 @@ tmo <- ggplot( arrange( fullBouts, MeanBouts ),
 # Define the target projection.
 targProj <- "+init=epsg:4326 +proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
 
+ainsworth <- SpatialPoints( coords = data.frame( long = -99.858233, lat = 42.547944 ), 
+                            proj4string = CRS( targProj ) )
+
 ##### Import Spatial Layers. #####
 
 # Create a SpatialPointsDataFrame with the nest data.
@@ -1059,22 +1094,22 @@ nestsSPDF <- spTransform( SpatialPointsDataFrame( coords = nestLocs,
 turbines.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
                                       layer = "wind_turbines" ), 
                              targProj )
-# Water
-water.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
-                                  layer = "Water" ), 
-                         targProj )
-# Major roads
-roads_major.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
-                                         layer = "major_rds" ), 
-                                targProj )
-# Roads
-roads_minor.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
-                                         layer = "Roads" ), 
-                                targProj )
-# Trees
-trees.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
-                                   layer = "Trees" ), 
-                          targProj )
+# # Water
+# water.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
+#                                   layer = "Water" ), 
+#                          targProj )
+# # Major roads
+# roads_major.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
+#                                          layer = "major_rds" ), 
+#                                 targProj )
+# # Roads
+# roads_minor.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
+#                                          layer = "Roads" ), 
+#                                 targProj )
+# # Trees
+# trees.shp <- spTransform( readOGR( dsn = "data/distribution/Landscape", 
+#                                    layer = "Trees" ), 
+#                           targProj )
 
 # Import the GRPC range .dbf (cropped and converted to a shapefile in ArcGIS on a separate machine by Weldon Hoppe) (original from USGS Gap Analysis Program).
 GRPC_range <- spTransform( readOGR( dsn = "data/distribution/GRPC_range/GPC_Range_NE", 
@@ -1114,35 +1149,35 @@ brown_poly <- SpatialPolygons( Srl = list( brown_outline = Polygons( srl = list(
 # Prepare the range and landscape data for plotting with ggplot2 and find the intersection between each layer and the relevant spatial extent.
 GRPC_range.dfc <- fortify( gIntersection( spgeom1 = GRPC_range, spgeom2 = NE_poly ) )
 
-water.shp@data$id <- rownames( water.shp@data )
-water.dfc <- fortify( gIntersection( spgeom1 = water.shp, spgeom2 = brown_poly ) ) %>% 
-  mutate( type = "water" )
-water.dfcsa <- fortify( crop( x = water.shp, y = nestsSPDF ), region = "id" ) %>% 
-  mutate( type = "water" )
-trees.shp@data$id <- rownames( trees.shp@data )
-trees.dfc <- fortify( gIntersection( spgeom1 = trees.shp, spgeom2 = brown_poly ) ) %>% 
-  mutate( type = "trees" )
-trees.dfcsa <- fortify( crop( x = trees.shp, y = nestsSPDF ), region = "id" ) %>% 
-  mutate( type = "trees" )
-
-# Create a master landcover data.frame, and one cropped to include just the study area.
-cover.dfc <- bind_rows( water.dfc, trees.dfc )
-cover.dfcsa <- bind_rows( water.dfcsa, trees.dfcsa )
-
-roads_major.shp@data$id <- rownames( roads_major.shp@data )
-roads_major.dfc <- fortify.SL( gIntersection( spgeom1 = roads_major.shp, spgeom2 = brown_poly ) ) %>% 
-  mutate( type = "major" )
-roads_major.dfcsa <- fortify.SL( crop( x = roads_major.shp, y = nestsSPDF ) ) %>% 
-  mutate( type = "major" )
-roads_minor.shp@data$id <- rownames( roads_minor.shp@data )
-roads_minor.dfc <- fortify.SL( gIntersection( spgeom1 = roads_minor.shp, spgeom2 = brown_poly ) ) %>% 
-  mutate( type = "minor" )
-roads_minor.dfcsa <- fortify.SL( crop( x = roads_minor.shp, y = nestsSPDF ) ) %>% 
-  mutate( type = "minor" )
-
-# Create a master roads data.frame, and one cropped to include just the study area.
-roads.dfc <- bind_rows( roads_major.dfc, roads_minor.dfc )
-roads.dfcsa <- bind_rows( roads_major.dfcsa, roads_minor.dfcsa )
+# water.shp@data$id <- rownames( water.shp@data )
+# water.dfc <- fortify( gIntersection( spgeom1 = water.shp, spgeom2 = brown_poly ) ) %>% 
+#   mutate( type = "water" )
+# water.dfcsa <- fortify( crop( x = water.shp, y = nestsSPDF ), region = "id" ) %>% 
+#   mutate( type = "water" )
+# trees.shp@data$id <- rownames( trees.shp@data )
+# trees.dfc <- fortify( gIntersection( spgeom1 = trees.shp, spgeom2 = brown_poly ) ) %>% 
+#   mutate( type = "trees" )
+# trees.dfcsa <- fortify( crop( x = trees.shp, y = nestsSPDF ), region = "id" ) %>% 
+#   mutate( type = "trees" )
+# 
+# # Create a master landcover data.frame, and one cropped to include just the study area.
+# cover.dfc <- bind_rows( water.dfc, trees.dfc )
+# cover.dfcsa <- bind_rows( water.dfcsa, trees.dfcsa )
+# 
+# roads_major.shp@data$id <- rownames( roads_major.shp@data )
+# roads_major.dfc <- fortify.SL( gIntersection( spgeom1 = roads_major.shp, spgeom2 = brown_poly ) ) %>% 
+#   mutate( type = "major" )
+# roads_major.dfcsa <- fortify.SL( crop( x = roads_major.shp, y = nestsSPDF ) ) %>% 
+#   mutate( type = "major" )
+# roads_minor.shp@data$id <- rownames( roads_minor.shp@data )
+# roads_minor.dfc <- fortify.SL( gIntersection( spgeom1 = roads_minor.shp, spgeom2 = brown_poly ) ) %>% 
+#   mutate( type = "minor" )
+# roads_minor.dfcsa <- fortify.SL( crop( x = roads_minor.shp, y = nestsSPDF ) ) %>% 
+#   mutate( type = "minor" )
+# 
+# # Create a master roads data.frame, and one cropped to include just the study area.
+# roads.dfc <- bind_rows( roads_major.dfc, roads_minor.dfc )
+# roads.dfcsa <- bind_rows( roads_major.dfcsa, roads_minor.dfcsa )
 
 ##### Map Creation. #####
 
@@ -1227,11 +1262,25 @@ brownMap <- ggplot( data = brownCo,
               inherit.aes = FALSE,
               aes( x = coords.x1,
                    y = coords.x2 ),
-              shape = 8 ) +
+              shape = 4, 
+              size = 1 ) +
   geom_point( data = data.frame( nestsSPDF@coords ),
               inherit.aes = FALSE,
               aes( x = UTM_E,
-                   y = UTM_N ) ) +
+                   y = UTM_N ), 
+              shape = 1 ) + 
+  geom_point( data = data.frame( ainsworth@coords ), 
+              inherit.aes = FALSE, 
+              aes( x = long, 
+                   y = lat ), 
+              shape = 20 ) + 
+  geom_text( data = data.frame( ainsworth@coords ), 
+             inherit.aes = FALSE, 
+             aes( x = long, 
+                  y = lat ), 
+             label = "Ainsworth", 
+             nudge_x = 0.055, 
+             nudge_y = 0.015 ) + 
   coord_fixed( ratio = 1.3 ) +
   scale_fill_grey() + 
   theme_classic() +
@@ -1254,20 +1303,15 @@ brownMap <- ggplot( data = brownCo,
          symbol = 3 )
 
 # Study area
-SAmap <- ggplot( data = cover.dfcsa, 
-                 aes( x = long, 
-                      y = lat, 
-                      group = group ) ) + 
+SAmap <- ggplot( data = data.frame( turbines.shp@coords ), 
+                 aes( x = coords.x1, 
+                      y = coords.x2 ) ) + 
   # geom_polygon( aes( group = interaction( group, type ),
   #                    fill = type ) ) +
   # geom_path( data = roads.dfcsa, 
   #            aes( group = interaction( group, type ) ), 
   #            alpha = 0.4 ) + 
-  geom_point( data = data.frame( turbines.shp@coords ),
-              inherit.aes = FALSE,
-              aes( x = coords.x1,
-                   y = coords.x2 ),
-              shape = 8 ) +
+  geom_point( shape = 8 ) +
   geom_point( data = data.frame( nestsSPDF@coords ), 
               inherit.aes = FALSE, 
               aes( x = UTM_E, 
@@ -1279,6 +1323,10 @@ SAmap <- ggplot( data = cover.dfcsa,
          axis.text = element_blank(), 
          axis.title = element_blank() )
 
+```
+
+```{r BrownCo}
+brownMap
 ```
 
 ```{r triMapFiguRe}
@@ -1294,23 +1342,67 @@ print( brownMap, vp = v3 )
 
 ```
 
-```{r STUDYAREAnotes, eval = FALSE, include = FALSE}
-# --past tense
-```
-
 ```{r mapCalcs}
 
 # Calculate the area of the study area.
 mcp <- SpatialPolygons( list( Polygons( list( Polygon( nestLocs[ chull( nestLocs ), ] ) ), 
                                         ID = "nestMCP" ) ), 
-                        proj4string = CRS( targProj ) ) # coordinates for the minimum convex polygon subtending the 30 nests
+                        proj4string = CRS( "+init=epsg:32610 +proj=utm +zone=14 +datumWGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0" ) ) # coordinates for the minimum convex polygon subtending the 30 nests
+
+mcp.t_utm <- spTransform( mcp.t <- SpatialPolygons( list( Polygons( list( Polygon( turbines.shp@coords[ chull( turbines.shp@coords ), ] ) ), 
+                                                                    ID = "turbineMCP" ) ), 
+                                                    proj4string = CRS( targProj ) ), 
+                          CRS( "+init=epsg:32610 +proj=utm +zone=14 +datumWGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0" ) )
+
 
 areaKm2 <- mcp@polygons[[1]]@Polygons[[1]]@area / 1e6
 prettyAreaKm2 <- plyr::round_any( x = areaKm2, accuracy = 5, f = round )
 
+area.Km2.t <- mcp.t_utm@polygons[[1]]@Polygons[[1]]@area / 1e6
+
+centroid <- coordinates( spTransform( mcp, CRS( targProj ) ) )
+centroid.t <- coordinates( mcp.t )
+
 ```
 
-We monitored nests 
+```{r climateCalcs}
+
+FtoC <- function( .F ){
+  ( .F - 32 ) / 1.8
+}
+
+climate <- read.csv( "data/climate.csv", stringsAsFactors = FALSE )
+climateSI <- climate %>%
+  transmute( Month = Month,
+             Precip.mm = Total_Normal_Precipitation_inches * 25.4,
+             MeanMaxTemp.C = FtoC( Mean_Normal_Max_Temperature_F ),
+             MeanMinTemp.C = FtoC( Mean_Normal_Min_Temperature_F ),
+             MeanAvgTemp.C = FtoC( Mean_Normal_Avg_Temperature_F ) )
+
+totPrecip <- c( inches = sum( climate$Total_Normal_Precipitation_inches ), mm = sum( climateSI$Precip.mm ) )
+breedingPeriod <- range( month( fullBouts$Date ) )
+breedingPrecip.percent <- ( sum( climate$Total_Normal_Precipitation_inches[ breedingPeriod[ 1 ]:breedingPeriod[ 2 ] ] ) / totPrecip[ 1 ] ) * 100
+
+minTemp <- which.min( climate$Mean_Normal_Min_Temperature_F )
+minTemp <- list( Month = climate$Month[ minTemp ], Fahr = climate$Mean_Normal_Min_Temperature_F[ minTemp ], Cels = climateSI$MeanMinTemp.C[ minTemp ] )
+
+maxTemp <- which.max( climate$Mean_Normal_Max_Temperature_F )
+maxTemp <- list( Month = climate$Month[ maxTemp ], Fahr = climate$Mean_Normal_Max_Temperature_F[ maxTemp ], Cels = climateSI$MeanMaxTemp.C[ maxTemp ] )
+
+mayTemp <- which( climate$Month == "May" )
+mayTemp <- list( Fahr = climate$Mean_Normal_Avg_Temperature_F[ mayTemp ], Cels = climateSI$MeanAvgTemp.C[ mayTemp ] )
+
+juneTemp <- which( climate$Month == "June" )
+juneTemp <- list( Fahr = climate$Mean_Normal_Avg_Temperature_F[ juneTemp ], Cels = climateSI$MeanAvgTemp.C[ juneTemp ] )
+
+julyTemp <- which( climate$Month == "July" )
+julyTemp <- list( Fahr = climate$Mean_Normal_Avg_Temperature_F[ julyTemp ], Cels = climateSI$MeanAvgTemp.C[ julyTemp ] )
+
+```
+
+Our study was part of a broader investigation of the ecological impacts of an existing wind energy facility on prairie-chickens. During the 2013 and 2014 breeding seasons, we monitored prairie-chicken nests in a `r prettyAreaKm2`-km$^2$ area centered at `r round(abs(centroid[1]),2)`°W, `r round(abs(centroid[2]),2)`°N, in Brown county, Nebraska, USA (Figure \@ref(fig:BrownCo)). The area is part of the Nebraska Sandhills, a **AREA**-km$^2$ region characterized by dunes of sandy soil stabilized by mixed-grass prairie (**CITATION**). Between 1981 and 2010, the area near the study site received an average of `r round(totPrecip[1],2)` in (`r round(totPrecip[2])` mm) of precipitation annually, of which `r round(breedingPrecip.percent,1)`% fell during the breeding season (May--July; @hprcc2017). Temperatures ranged from an average monthly low of `r round(minTemp$Fahr,1)`°F (`r round(minTemp$Cels,1)`°C) in `r minTemp$Month` to an average monthly high of `r round(maxTemp$Fahr,1)`°F (`r round(maxTemp$Cels,1)`°C) in `r maxTemp$Month` [@hprcc2017]. Average monthly temperatures during the breeding season were `r round(mayTemp$Fahr,1)`°F (`r round(mayTemp$Cels,1)`°C) in May, `r round(juneTemp$Fahr,1)`°F (`r round(juneTemp$Cels,1)`°C) in June, and `r round(julyTemp$Fahr,1)`°F (`r round(julyTemp$Cels,1)`°C) in July.
+
+The study site encompassed a wind energy facility owned and managed by the Nebraska Public Power District [@nppd2017]. The facility is centered at `r round(abs(centroid.t[1]),2)`°W, `r round(abs(centroid.t[2]),2)`°N and covers a total area of approximately `r round(area.Km2.t,1)` km$^2$. 
 
 ###**METHODS** {#methods}
 
@@ -2631,7 +2723,443 @@ dur.avg_pred.ws.plot
 
 ```{r FREQranef}
 
-globalBoutsMod <- "numBouts ~ fYear + NestAge + VOR_AVG + WindSpeed * Turbine_Distance_m + Roads_Distance_m + Water_Distance_m * Jday"
+globalBoutsMod <- "numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + VOR_AVG + WindSpeed * Turbine_Distance_m + Roads_Distance_m + Water_Distance_m * Jday"
+
+freqData$numBouts <- ifelse( freqData$numBouts >=1, 1, 0 )
+
+freq.ranef_forms <- list( int = as.formula( paste( globalBoutsMod, " + ( 1 | fID )", sep = "" ) ), 
+                          year = as.formula( paste( globalBoutsMod, " + ( fYear - 1 | fID )", sep = "" ) ), 
+                          year.int = as.formula( paste( globalBoutsMod, " + ( fYear | fID )", sep = "" ) ), 
+                          year_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( fYear - 1 | fID )", sep = "" ) ), 
+                          age = as.formula( paste( globalBoutsMod, " + ( NestAge - 1 | fID )", sep = "" ) ), 
+                          age.int = as.formula( paste( globalBoutsMod, " + ( NestAge | fID )", sep = "" ) ), 
+                          age_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( NestAge - 1 | fID )", sep = "" ) ), 
+                          # age.temp = as.formula( paste( globalBoutsMod, " + ( NestAge * AmbientTemp - 1 | fID )", sep = "" ) ), 
+                          # age.temp.int = as.formula( paste( globalBoutsMod, " + ( NestAge * AmbientTemp | fID )", sep = "" ) ), 
+                          # age.temp_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( NestAge * AmbientTemp - 1 | fID )", sep = "" ) ), 
+                          temp = as.formula( paste( globalBoutsMod, " + ( AmbientTemp - 1 | fID )", sep = "" ) ), 
+                          temp.int = as.formula( paste( globalBoutsMod, " + ( AmbientTemp | fID )", sep = "" ) ), 
+                          temp_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( AmbientTemp - 1 | fID )", sep = "" ) ), 
+                          precip = as.formula( paste( globalBoutsMod, " + ( Precipitation - 1 | fID )", sep = "" ) ), 
+                          precip.int = as.formula( paste( globalBoutsMod, " + ( Precipitation | fID )", sep = "" ) ), 
+                          precip_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( Precipitation - 1 | fID )", sep = "" ) ), 
+                          vor = as.formula( paste( globalBoutsMod, " + ( VOR_AVG - 1 | fID )", sep = "" ) ), 
+                          vor.int = as.formula( paste( globalBoutsMod, " + ( VOR_AVG | fID )", sep = "" ) ), 
+                          vor_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( VOR_AVG - 1 | fID )", sep = "" ) ), 
+                          wind = as.formula( paste( globalBoutsMod, " + ( WindSpeed - 1 | fID )", sep = "" ) ), 
+                          wind.int = as.formula( paste( globalBoutsMod, " + ( WindSpeed | fID )", sep = "" ) ), 
+                          wind_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( WindSpeed - 1 | fID )", sep = "" ) ), 
+                          turb = as.formula( paste( globalBoutsMod, " + ( Turbine_Distance_m - 1 | fID )", sep = "" ) ), 
+                          turb.int = as.formula( paste( globalBoutsMod, " + ( Turbine_Distance_m | fID )", sep = "" ) ), 
+                          turb_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( Turbine_Distance_m - 1 | fID )", sep = "" ) ), 
+                          road = as.formula( paste( globalBoutsMod, " + ( Roads_Distance_m - 1 | fID )", sep = "" ) ), 
+                          road.int = as.formula( paste( globalBoutsMod, " + ( Roads_Distance_m | fID )", sep = "" ) ), 
+                          road_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( Roads_Distance_m - 1 | fID )", sep = "" ) ), 
+                          h2o = as.formula( paste( globalBoutsMod, " + ( Water_Distance_m - 1 | fID )", sep = "" ) ), 
+                          h2o.int = as.formula( paste( globalBoutsMod, " + ( Water_Distance_m | fID )", sep = "" ) ), 
+                          h2o_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( Water_Distance_m - 1 | fID )", sep = "" ) ), 
+                          # h2o.Jday = as.formula( paste( globalBoutsMod, " + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ), 
+                          # h2o.Jday.int = as.formula( paste( globalBoutsMod, " + ( Water_Distance_m * Jday | fID )", sep = "" ) ),
+                          # h2o.Jday_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( Water_Distance_m * Jday - 1 | fID )", sep = "" ) ),
+                          Jday = as.formula( paste( globalBoutsMod, " + ( Jday - 1 | fID )", sep = "" ) ), 
+                          Jday.int = as.formula( paste( globalBoutsMod, " + ( Jday | fID )", sep = "" ) ), 
+                          Jday_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( Jday - 1 | fID )", sep = "" ) ) )
+
+freq.ranef <- lapply( X = freq.ranef_forms,
+                      FUN = function( .ff ) glmer( .ff,
+                                                   data = freqData,
+                                                   family = binomial( link = "logit" ) ) )
+
+csFreqData <- freqData %>% 
+  mutate( Mins = ( Mins - mean( Mins, na.rm = TRUE ) ) / sd( Mins, na.rm = TRUE ), 
+          AmbientTemp = ( AmbientTemp - mean( AmbientTemp, na.rm = TRUE ) ) / sd( AmbientTemp, na.rm = TRUE ), 
+          WindSpeed = ( WindSpeed - mean( WindSpeed, na.rm = TRUE ) ) / sd( WindSpeed, na.rm = TRUE ), 
+          AirPressure = ( AirPressure - mean( AirPressure, na.rm = TRUE ) ) / sd( AirPressure, na.rm = TRUE ), 
+          Precipitation = ( Precipitation - mean( Precipitation, na.rm = TRUE ) ) / sd( Precipitation, na.rm = TRUE ), 
+          VPD = ( VPD - mean( VPD, na.rm = TRUE ) ) / sd( VPD, na.rm = TRUE ), 
+          Jday = ( Jday - mean( Jday, na.rm = TRUE ) ) / sd( Jday, na.rm = TRUE ), 
+          NestAge = ( NestAge - mean( NestAge, na.rm = TRUE ) ) / sd( NestAge, na.rm = TRUE ), 
+          Turbine_Distance_m = ( Turbine_Distance_m - mean( Turbine_Distance_m, na.rm = TRUE ) ) / sd( Turbine_Distance_m, na.rm = TRUE ), 
+          Roads_Distance_m = ( Roads_Distance_m - mean( Roads_Distance_m, na.rm = TRUE ) ) / sd( Roads_Distance_m, na.rm = TRUE ), 
+          Trees_Distance_m = ( Trees_Distance_m - mean( Trees_Distance_m, na.rm = TRUE ) ) / sd( Trees_Distance_m, na.rm = TRUE ), 
+          Water_Distance_m = ( Water_Distance_m - mean( Water_Distance_m, na.rm = TRUE ) ) / sd( Water_Distance_m, na.rm = TRUE ), 
+          VOR_AVG = ( VOR_AVG - mean( VOR_AVG, na.rm = TRUE ) ) / sd( VOR_AVG, na.rm = TRUE ) )
+
+freq.ranef_cs <- lapply( X = freq.ranef_forms, 
+                         FUN = function( .ff ) glmer( .ff, 
+                                                      data = csFreqData, 
+                                                      family = binomial( link = "logit" ) ) )
+
+CC <- convCheckR( freq.ranef_cs ) # 0 warnings!?
+# UnID        : NONE!
+# LargeMaxGrad: NONE!
+# LargeParGrad: NONE!
+# Singular    : all. (is that a binomial thing, perhaps?)
+
+freq.ranef_fit <- freq.ranef_cs
+
+```
+
+```{r FREQranefSelection}
+
+op <- AICcmodavg::c_hat( freq.ranef_fit[[ length( freq.ranef_fit ) ]] )
+freq.ranef_aicc <- sapply( X = freq.ranef_fit, FUN = AICc )
+freq.ranef_delt <- freq.ranef_aicc - min( freq.ranef_aicc )
+freq.ranef_wgts <- exp( -0.5 * freq.ranef_delt )
+freq.ranef_wgts <- freq.ranef_wgts / sum( freq.ranef_wgts )
+freq.ranef_REs <- sapply( X = freq.ranef_fit, FUN = function( .mm ) fetch.RE( .mm, as.form = TRUE ) )
+freq.ranef_nFE <- sapply( X = freq.ranef_fit, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
+freq.ranef_nRE <- sapply( X = freq.ranef_fit, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
+
+freq.ranef_selection <- data.frame( Model = names( freq.ranef_aicc ), 
+                                    RE = freq.ranef_REs, 
+                                    AICc = freq.ranef_aicc, 
+                                    DeltaAICc = freq.ranef_delt, 
+                                    AWt = freq.ranef_wgts, 
+                                    nFE = freq.ranef_nFE, 
+                                    nRE = freq.ranef_nRE )[ order( freq.ranef_delt ), ]
+
+freq.ranef_selection.abbrev <- freq.ranef_selection %>% 
+  filter( DeltaAICc <= 10 )
+
+freq.ranef_topMod <- freq.ranef_fit[[ "int" ]]
+
+```
+
+```{r FREQfixefSelection}
+
+# ## ITERATION 1: ##
+# 
+# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + VOR_AVG + WindSpeed * Turbine_Distance_m + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ), 
+#                      family = binomial( link = "logit" ), 
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: VOR_AVG (p=0.985825)
+
+# ## ITERATION 2: ##
+# 
+# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + WindSpeed * Turbine_Distance_m + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ),
+#                      family = binomial( link = "logit" ),
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: Roads_Distance_m (p=0.711681)
+
+# ## ITERATION 3: ##
+# 
+# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + WindSpeed * Turbine_Distance_m + Water_Distance_m * Jday + ( 1 | fID ),
+#                      family = binomial( link = "logit" ),
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: Water_Distance_m:Jday (p=0.621493)
+
+# ## ITERATION 4: ##
+# 
+# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + WindSpeed * Turbine_Distance_m + Water_Distance_m + Jday + ( 1 | fID ),
+#                      family = binomial( link = "logit" ),
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: WindSpeed:Turbine_Distance_m (p=0.537227)
+
+# ## ITERATION 5: ##
+# 
+# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + WindSpeed + Turbine_Distance_m + Water_Distance_m + Jday + ( 1 | fID ),
+#                      family = binomial( link = "logit" ),
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: NestAge:AmbientTemp (p=0.512824)
+
+# ## ITERATION 6: ##
+# 
+# freq.fixef <- glmer( numBouts ~ fYear + NestAge + AmbientTemp + Precipitation + WindSpeed + Turbine_Distance_m + Water_Distance_m + Jday + ( 1 | fID ),
+#                      family = binomial( link = "logit" ),
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: Water_Distance_m (p=0.368459)
+
+# ## ITERATION 7: ##
+# 
+# freq.fixef <- glmer( numBouts ~ fYear + NestAge + AmbientTemp + Precipitation + WindSpeed + Turbine_Distance_m + Jday + ( 1 | fID ),
+#                      family = binomial( link = "logit" ),
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: AmbientTemp (p=0.294402)
+
+# ## ITERATION 8: ##
+# 
+# freq.fixef <- glmer( numBouts ~ fYear + NestAge + Precipitation + WindSpeed + Turbine_Distance_m + Jday + ( 1 | fID ),
+#                      family = binomial( link = "logit" ),
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: fYear (p=0.167429)
+
+# ## ITERATION 9: ##
+# 
+# freq.fixef <- glmer( numBouts ~ NestAge + Precipitation + WindSpeed + Turbine_Distance_m + Jday + ( 1 | fID ),
+#                      family = binomial( link = "logit" ),
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: Turbine_Distance_m (p=0.127381)
+
+# ## ITERATION 10: ##
+# 
+# freq.fixef <- glmer( numBouts ~ NestAge + Precipitation + WindSpeed + Jday + ( 1 | fID ),
+#                      family = binomial( link = "logit" ),
+#                      data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: Precipitation (p=0.062821)
+
+# ## ITERATION 11: ##
+# 
+freq.fixef <- glmer( numBouts ~ NestAge + WindSpeed + Jday + ( 1 | fID ),
+                     family = binomial( link = "logit" ),
+                     data = csFreqData )
+# 
+# summary( freq.fixef ) # least significant term: NestAge (p=0.029678)
+
+freq.mod_be <- freq.fixef
+
+```
+
+```{r FREQvalidatR}
+
+freq.test <- augment( freq.mod_be ) %>% 
+  mutate( NestAge = ( NestAge * sd( freqData$NestAge, na.rm = TRUE ) ) + mean( freqData$NestAge, na.rm = TRUE ), 
+          WindSpeed = ( WindSpeed * sd( freqData$WindSpeed, na.rm = TRUE ) ) + mean( freqData$WindSpeed, na.rm = TRUE ), 
+          Jday = ( Jday * sd( freqData$Jday, na.rm = TRUE ) ) + mean( freqData$Jday, na.rm = TRUE ), 
+          .std.resid = std.resid.glmer( freq.mod_be ), 
+          .qresid = qres2( freq.mod_be ), 
+          .hat = hatvalues( freq.mod_be ) ) %>% 
+  dplyr::select( -.rownames )
+# ests <- influence.ME::influence( freq.mod_be, obs = TRUE )
+# dur.test$.cooksd <- cooks.distance( ests )[ which( !is.na( freqData$WindSpeed ) & !is.na( freqData$NestAge ) ) ]
+
+rVf_freq <- ggplot( data = freq.test, 
+                    aes( x = .fitted, 
+                         y = .qresid ) ) + 
+  geom_smooth( colour = "seashell4" ) + 
+  geom_hline( yintercept = 0, 
+              linetype = "dashed" ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Fitted values", 
+        y = "Randomized quantile residuals" ) + 
+  theme( text = element_text( size = 12 ) )
+
+y <- quantile( x = freq.test$.qresid, probs = c( 0.25, 0.75 ) )
+x <- qnorm( p = c( 0.25, 0.75 ) )
+slope <- diff( y ) / diff( x )
+int <- y[ 1L ] - ( slope * x[ 1L ] )
+
+qq_freq <- ggplot( data = freq.test, 
+                   aes( sample = .qresid ) ) + 
+  geom_abline( slope = slope, 
+               intercept = int, 
+               colour = "tomato" ) + 
+  stat_qq( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Theoretical quantiles", 
+        y = "Randomized quantile r residuals" ) + 
+  theme( text = element_text( size = 12 ) )
+
+sl_freq <- ggplot( data = freq.test, 
+                   aes( x = .fitted, 
+                        y = sqrt( abs( .qresid ) ) ) ) + 
+  geom_smooth( colour = "seashell4" ) + 
+  geom_hline( yintercept = 1, 
+              linetype = "dashed" ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Fitted values", 
+        y = "√|Randomized quantile residuals|" ) + 
+  theme( text = element_text( size = 12 ) )
+
+lev_freq <- ggplot( data = freq.test, 
+                    aes( x = .hat, 
+                         y = .qresid ) ) + 
+  geom_hline( yintercept = 0,
+              size = 1,
+              colour = "grey" ) +
+  geom_vline( xintercept = 0,
+              size = 1,
+              colour = "grey" ) +
+  geom_point( alpha = 0.4 ) +
+  theme_classic() +
+  labs( x = "Leverage",
+        y = "Randomized quantile residuals" )
+
+cowplot::plot_grid( rVf_freq, qq_freq, sl_freq, lev_freq, nrow = 2, labels = "AUTO" )
+
+```
+
+```{r FREQcheckR}
+
+rVna <- ggplot( data = freq.test, 
+                aes( x = NestAge, 
+                     y = .qresid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Nest age (d)", 
+        y = "Randomized quantile residuals" )
+
+rVws <- ggplot( data = freq.test, 
+                aes( x = WindSpeed, 
+                     y = .qresid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Wind speed (mph)", 
+        y = "Randomized quantile residuals" )
+
+rVjd <- ggplot( data = freq.test, 
+                aes( x = Jday, 
+                     y = .qresid ) ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Ordinal date", 
+        y = "Randomized quantile residuals" )
+
+fVo <- ggplot( data = freq.test, 
+               aes( x = as.factor( numBouts ), 
+                    y = .mu ) ) + 
+  geom_boxplot( outlier.alpha = 0.4, 
+                fill = "grey24" ) + 
+  theme_classic() + 
+  labs( x = "Observed off-bout occurrence", 
+        y = "Predicted probability of off-bout occurrence" )
+
+cowplot::plot_grid( rVna, rVws, rVjd, fVo, nrow = 2, labels = "AUTO" )
+
+```
+
+```{r FREQpredictRwindSpeed}
+
+nd <- expand.grid( NestAge = 0, 
+                   WindSpeed = ( seq( from = floor( min( freqData$WindSpeed, na.rm = TRUE ) ), 
+                                      to = ceiling( max( freqData$WindSpeed, na.rm = TRUE ) ), 
+                                      by = 0.5 ) - mean( freqData$WindSpeed, na.rm = TRUE ) ) / sd( freqData$WindSpeed, na.rm = TRUE ), 
+                   Jday = 0 )
+
+freq.predict_ws <- nd %>%
+  mutate( .mu = predict( freq.mod_be, 
+                         newdata = nd, 
+                         re.form = ~0, 
+                         type = "response" ), 
+          lo.95 = dur.predict_bootCI[ , 1 ],
+          hi.95 = dur.predict_bootCI[ , 2 ],
+          NestAge_r = ( NestAge * sd( freqData$NestAge, na.rm = TRUE ) ) + mean( freqData$NestAge, na.rm = TRUE ), 
+          WindSpeed_r = ( WindSpeed * sd( freqData$WindSpeed, na.rm = TRUE ) ) + mean( freqData$WindSpeed, na.rm = TRUE ), 
+          Jday_r = ( Jday * sd( freqData$Jday, na.rm = TRUE ) ) + mean( freqData$Jday, na.rm = TRUE ), 
+          lo.95_r = exp( lo.95 ), 
+          hi.95_r = exp( hi.95 ) )
+
+freq.predict_ws.plot <- ggplot( data = freq.predict_ws, 
+                                aes( x = WindSpeed_r, 
+                                     y = .mu ) ) + 
+  geom_line() + 
+  geom_rug( data = filter( freqData, numBouts > 0 ), 
+            inherit.aes = FALSE, 
+            aes( x = WindSpeed, 
+                 y = numBouts ), 
+            sides = "t", 
+            alpha = 0.4 ) + 
+  geom_rug( data = filter( freqData, numBouts == 0 ), 
+            inherit.aes = FALSE, 
+            aes( x = WindSpeed, 
+                 y = numBouts ), 
+            sides = "b", 
+            alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Wind speed (mph)", 
+        y = "Probability of off-bout initiation" )
+
+```
+
+```{r FREQpredictRnestAge}
+
+nd <- expand.grid( NestAge = ( seq( from = floor( min( freqData$NestAge, na.rm = TRUE ) ), 
+                                    to = ceiling( max( freqData$NestAge, na.rm = TRUE ) ), 
+                                    by = 0.5 ) - mean( freqData$NestAge, na.rm = TRUE ) ) / sd( freqData$NestAge, na.rm = TRUE ), 
+                   WindSpeed = 0, 
+                   Jday = 0 )
+
+freq.predict_na <- nd %>%
+  mutate( .mu = predict( freq.mod_be, 
+                         newdata = nd, 
+                         re.form = ~0, 
+                         type = "response" ), 
+          lo.95 = dur.predict_bootCI[ , 1 ],
+          hi.95 = dur.predict_bootCI[ , 2 ],
+          NestAge_r = ( NestAge * sd( freqData$NestAge, na.rm = TRUE ) ) + mean( freqData$NestAge, na.rm = TRUE ), 
+          WindSpeed_r = ( WindSpeed * sd( freqData$WindSpeed, na.rm = TRUE ) ) + mean( freqData$WindSpeed, na.rm = TRUE ), 
+          Jday_r = ( Jday * sd( freqData$Jday, na.rm = TRUE ) ) + mean( freqData$Jday, na.rm = TRUE ), 
+          lo.95_r = exp( lo.95 ), 
+          hi.95_r = exp( hi.95 ) )
+
+freq.predict_na.plot <- ggplot( data = freq.predict_na, 
+                                aes( x = NestAge_r, 
+                                     y = .mu ) ) + 
+  geom_line() + 
+  geom_rug( data = filter( freqData, numBouts > 0 ), 
+            inherit.aes = FALSE, 
+            aes( x = NestAge, 
+                 y = numBouts ), 
+            position = "jitter", 
+            sides = "t", 
+            alpha = 0.4 ) + 
+  geom_rug( data = filter( freqData, numBouts == 0 ), 
+            inherit.aes = FALSE, 
+            aes( x = NestAge, 
+                 y = numBouts ), 
+            sides = "b", 
+            position = "jitter", 
+            alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Nest age (d))", 
+        y = "Probability of off-bout initiation" )
+
+```
+
+```{r FREQpredictRjDay}
+
+nd <- expand.grid( NestAge = 0, 
+                   WindSpeed = 0, 
+                   Jday = ( seq( from = floor( min( freqData$Jday, na.rm = TRUE ) ), 
+                                 to = ceiling( max( freqData$Jday, na.rm = TRUE ) ), 
+                                 by = 0.5 ) - mean( freqData$Jday, na.rm = TRUE ) ) / sd( freqData$Jday, na.rm = TRUE ) )
+
+freq.predict_jd <- nd %>%
+  mutate( .mu = predict( freq.mod_be, 
+                         newdata = nd, 
+                         re.form = ~0, 
+                         type = "response" ), 
+          lo.95 = dur.predict_bootCI[ , 1 ],
+          hi.95 = dur.predict_bootCI[ , 2 ],
+          NestAge_r = ( NestAge * sd( freqData$NestAge, na.rm = TRUE ) ) + mean( freqData$NestAge, na.rm = TRUE ), 
+          WindSpeed_r = ( WindSpeed * sd( freqData$WindSpeed, na.rm = TRUE ) ) + mean( freqData$WindSpeed, na.rm = TRUE ), 
+          Jday_r = ( Jday * sd( freqData$Jday, na.rm = TRUE ) ) + mean( freqData$Jday, na.rm = TRUE ), 
+          lo.95_r = exp( lo.95 ), 
+          hi.95_r = exp( hi.95 ) )
+
+freq.predict_jd.plot <- ggplot( data = freq.predict_jd, 
+                                aes( x = Jday_r, 
+                                     y = .mu ) ) + 
+  geom_line() + 
+  geom_rug( data = filter( freqData, numBouts > 0 ), 
+            inherit.aes = FALSE, 
+            aes( x = Jday, 
+                 y = numBouts ), 
+            sides = "t", 
+            position = "jitter", 
+            alpha = 0.4 ) + 
+  geom_rug( data = filter( freqData, numBouts == 0 ), 
+            inherit.aes = FALSE, 
+            aes( x = Jday, 
+                 y = numBouts ), 
+            sides = "b", 
+            position = "jitter", 
+            alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Ordinal date", 
+        y = "Probability of off-bout initiation" )
 
 ```
 
