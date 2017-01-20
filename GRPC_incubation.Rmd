@@ -43,7 +43,7 @@ library( MASS )
 library( ggsn )        # scalebar and north
 library( sp )
 
-knitr::write_bib( x = c( "SDMTools", "lme4", "MuMIn" ), 
+knitr::write_bib( x = c( "MASS", "SDMTools", "lme4", "MuMIn" ), 
                   file = "pkgs.bib" )
 
 ```
@@ -872,7 +872,8 @@ freqData <- plyr::ddply( .data = fullBouts,
                                        AirPressure = .pressure, 
                                        Precipitation = .precip, 
                                        VPD = .vpd ) } ) %>% 
-  mutate( fID = as.factor( id ), 
+  mutate( blockID = as.factor( hour( blockStart ) ), 
+          fID = as.factor( id ), 
           fYear = as.factor( year( blockStart ) ), 
           Jday = yday( blockStart ), 
           Date = ymd( date( blockStart ), tz = "America/Chicago" ) ) %>% 
@@ -1068,6 +1069,10 @@ tmo <- ggplot( arrange( fullBouts, MeanBouts ),
 # ----justify why the research was necessary and conducted
 
 # --clear and succinct statement of objectives and hypotheses
+
+#### INCLUDE
+
+# --rel. low rainfall and rapid infiltration (sandy soils) make for a dry landscape [NE Nat Leg Plan]-->water stress
 ```
 
 ###**STUDY AREA** {#studyarea}
@@ -1086,7 +1091,7 @@ ainsworth <- SpatialPoints( coords = data.frame( long = -99.858233, lat = 42.547
 nestLocs <- nests[ , c( "UTM_E", "UTM_N" ) ]
 nestsSPDF <- spTransform( SpatialPointsDataFrame( coords = nestLocs,
                                                   data = nests,
-                                                  proj4string = CRS( "+init=epsg:32610 +proj=utm +zone=14 +datumWGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0") ), 
+                                                  proj4string = CRS( "+init=epsg:32610 +proj=utm +zone=14 +datumWGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0" ) ), 
                           targProj )
 
 ### Read in the landscape shapefiles.
@@ -1398,11 +1403,22 @@ juneTemp <- list( Fahr = climate$Mean_Normal_Avg_Temperature_F[ juneTemp ], Cels
 julyTemp <- which( climate$Month == "July" )
 julyTemp <- list( Fahr = climate$Mean_Normal_Avg_Temperature_F[ julyTemp ], Cels = climateSI$MeanAvgTemp.C[ julyTemp ] )
 
+
+# # Wind data--easier just to get the same information (i.e., that the study area is in a class 4 wind power potential zone) from the Wind Energy Resource Atlas.
+# wind <- readOGR( dsn = "data/Nebraska_Wind_High_Resolution", layer = "nebraska_50mwind" )
+# wind@data$id <- rownames( wind@data )
+# wind <- spTransform( wind, CRS( targProj ) )
+# windData <- data.frame( wind )
+# 
+# brownWind <- na.omit( cbind( wind %over% brown_poly, windData ) )
+# 
+# brownWind.pts <- fortify( wind[ wind$id %in% unique( brownWind$id ), ], region = "id" )
+
 ```
 
-Our study was part of a broader investigation of the ecological impacts of an existing wind energy facility on prairie-chickens. During the 2013 and 2014 breeding seasons, we monitored prairie-chicken nests in a `r prettyAreaKm2`-km$^2$ area centered at `r round(abs(centroid[1]),2)`°W, `r round(abs(centroid[2]),2)`°N, in Brown county, Nebraska, USA (Figure \@ref(fig:BrownCo)). The area is part of the Nebraska Sandhills, a **AREA**-km$^2$ region characterized by dunes of sandy soil stabilized by mixed-grass prairie (**CITATION**). Between 1981 and 2010, the area near the study site received an average of `r round(totPrecip[1],2)` in (`r round(totPrecip[2])` mm) of precipitation annually, of which `r round(breedingPrecip.percent,1)`% fell during the breeding season (May--July; @hprcc2017). Temperatures ranged from an average monthly low of `r round(minTemp$Fahr,1)`°F (`r round(minTemp$Cels,1)`°C) in `r minTemp$Month` to an average monthly high of `r round(maxTemp$Fahr,1)`°F (`r round(maxTemp$Cels,1)`°C) in `r maxTemp$Month` [@hprcc2017]. Average monthly temperatures during the breeding season were `r round(mayTemp$Fahr,1)`°F (`r round(mayTemp$Cels,1)`°C) in May, `r round(juneTemp$Fahr,1)`°F (`r round(juneTemp$Cels,1)`°C) in June, and `r round(julyTemp$Fahr,1)`°F (`r round(julyTemp$Cels,1)`°C) in July.
+During the 2013 and 2014 breeding seasons (May--July), we monitored prairie-chicken nests in a `r prettyAreaKm2`-km$^2$ area centered at `r round(abs(centroid[1]),2)`°W, `r round(abs(centroid[2]),2)`°N in Brown county, Nebraska, USA (Figure \@ref(fig:BrownCo)). The area is part of the Nebraska Sandhills, a 50,000-km$^2$ region spanning the north-central portion of the state and dominated by dunes of sandy soil stabilized by mixed-grass prairie and interspersed with shallow lakes and wetlands [@schneider2017]. Between 1981 and 2010, the area received an average of `r round(totPrecip[1],2)` in (`r round(totPrecip[2])` mm) of precipitation annually, of which `r round(breedingPrecip.percent,1)`% fell during the breeding season [(May--July; [@hprcc2017]. Temperatures ranged from an average monthly low of `r round(minTemp$Fahr,1)`°F (`r round(minTemp$Cels,1)`°C) in `r minTemp$Month` to an average monthly high of `r round(maxTemp$Fahr,1)`°F (`r round(maxTemp$Cels,1)`°C) in `r maxTemp$Month` [@hprcc2017]. Average monthly temperatures during the breeding season were `r round(mayTemp$Fahr,1)`°F (`r round(mayTemp$Cels,1)`°C) in May, `r round(juneTemp$Fahr,1)`°F (`r round(juneTemp$Cels,1)`°C) in June, and `r round(julyTemp$Fahr,1)`°F (`r round(julyTemp$Cels,1)`°C) in July [@hprcc2017]. Throughout the Sandhills, annual average wind speeds ranged from 7.0 to 7.5 m/s at a height of 50 m [@elliott1986].
 
-The study site encompassed a wind energy facility owned and managed by the Nebraska Public Power District [@nppd2017]. The facility is centered at `r round(abs(centroid.t[1]),2)`°W, `r round(abs(centroid.t[2]),2)`°N and covers a total area of approximately `r round(area.Km2.t,1)` km$^2$. 
+The study site encompasses a wind energy facility owned and operated by the Nebraska Public Power District since 2005 [@nppd2017]. The facility is centered at `r round(abs(centroid.t[1]),2)`°W, `r round(abs(centroid.t[2]),2)`°N and covers a total area of `r round(area.Km2.t,1)` km$^2$. Each of the 36 turbines at the facility occupies a footprint of approximately 0.5 acres (0.2 ha), stands 70 m tall at the hub, and has a rotor diameter of 82 m [@nppd2017]. The turbines operate intermittently, at an estimated 40% of the full capacity (1.65 MW/turbine) [@nppd2017].
 
 ###**METHODS** {#methods}
 
@@ -1421,9 +1437,33 @@ The study site encompassed a wind energy facility owned and managed by the Nebra
 
 ####**Field Methods** {#fieldmethods}
 
-####**iButton Data Processing** {#ibuttonmethods}
+We placed Thermochron$^{\circledR}$ iButton$^{\circledR}$ temperature loggers (model DS1921G; Maxim Integrated, San Jose, CA, USA; hereafter iButtons) in prairie-chicken nests to record nest temperature at 4-minute intervals. The iButtons were placed variously before or after clutch completion (and initiation of incubation) depending upon when the nest was located, and were retrieved after the eggs hatched or the nest failed (or was abandoned). Consequently, not all nests were monitored throughout the entire 28-day incubation period.
 
-####**Statistical Analyses** {#statisticalmethods}
+**<< Methods on spatial data? >>**
+
+####**Data Analyses** {#datamethods}
+
+We **<< manually? >>** identified off-bouts and measured their duration from iButton temperature data in Raven Pro (Version 1.5; Cornell Lab of Ornithology, Ithaca, NY, USA), using Rhythm [@cooper2005] to convert the files into an appropriate format. We defined off-bouts from the time of the temperature recording just prior to the bird's departure from the nest (indicated by a sudden decrease in temperature in the time-series) until the time of the recording made just prior to her return (indicated by a sharp rise in temperature). Because the precise signature of off-bouts varied, we based our classification on the following criteria: (1) a minimum duration of 10 minutes, (2) a total temperature difference of at least 2°C, and (3) a minimum initial absolute slope in the temperature--time plot of 0.1°C/minute (0.4°C between sequential recordings). **<< These criteria are from Cole's poster (w/ #1 modified based on discussion w/ EJ); should I instead just cite the poster? >>**
+
+Because iButtons sample temperature instantaneously rather than continuously, off-bout identification and duration measurements are subject to error that is inversely proportional to the sampling rate [@cooper2005]. We configured iButtons to log temperatures at 4-minute intervals; therefore, the maximum possible error in a single duration measurement (assuming it is correctly identified) is 8 minutes. This error is small compared to the mean measured off-bout duration and in relation to actual variation among off-bout durations (`r round(mean(bouts$Mins),1)` ± `r round(sd(bouts$Mins),1)` min [SD]). **<< Does this belong in the results? >>**
+
+```{r}
+
+# --note that nest age was not calculable for all nests
+# --note about derivation of wind speed and ambient temperature by linear interpolation
+
+# --sampling rate = 1 / 4 min.
+# --each off-bout duration estimate therefore has associated error ~T: [@cooper2005]
+# ----µ = 0 min
+# ----SD ~= 0.408 * 4 min (1.632 min)
+# ----max. value = 4 min
+
+# --compare sampling error to spread of actual distribution:
+# ----with( fullBouts, mean( Mins ) ) # 43.27428
+# ----with( fullBouts, sd( Mins ) ) # 24.11489
+# ----max. sampling error (4 min) is 9.2% and 16.6% of the magnitude of the true mean and sd
+
+```
 
 ```{r nestRsuccess}
 
@@ -1638,9 +1678,9 @@ globalMinsMod <- "Mins ~ fYear + NestAge * TempDiff + VOR_AVG + WindSpeed * Turb
 bcMinTransform <- boxcox( as.formula( globalMinsMod ), 
                           data = fullBouts, 
                           plotit = FALSE )
-l_est <- bcMinTransform$x[ which.max( bcMinTransform$y ) ]
-fullBouts$tMins <- ifelse( test = rep( l_est != 0, length( fullBouts$Mins ) ), 
-                           yes = fullBouts$Mins^l_est, 
+l_est.dur <- bcMinTransform$x[ which.max( bcMinTransform$y ) ]
+fullBouts$tMins <- ifelse( test = rep( l_est.dur != 0, length( fullBouts$Mins ) ), 
+                           yes = fullBouts$Mins^l_est.dur, 
                            no = log( fullBouts$Mins ) )
 
 globalMinsMod <- paste( "t", globalMinsMod, sep = "" )
@@ -1806,10 +1846,18 @@ dur.ranef_topMod <- dur.ranef_fit[[ which.min( dur.ranef_delta ) ]]
 
 ```
 
+We created (generalized) linear mixed models ([G]LMMs) of off-bout duration and frequency using nest (hen) ID as a grouping factor in the random-effects structure. A Box-Cox power transformation of off-bout duration suggested that the variable was approximately log-normally distributed (maximum likelihood estimate for $\lambda$ = `r l_est.dur`). We therefore used a Gaussian error distribution and identity link function to model the natural-log-transformed duration.
+
+Using a global (maximal) fixed-effects structure, we fit models with different random-effects strctures and selected among them using Akaike's Information Criterion with a second-order correction for small sample size (AIC$_c$; [@anderson2008]) following the procedure described by Zuur et al. [-@zuur2009] for selecting the most parsimonious mixed-effects model. The LMMs of off-bout duration were fit using restricted maximum likelihood (REML) to minimize bias in the random-effects estimates [@zuur2009]. We then selected a fixed-effects structure using the top-ranked random effects structure. Whereas Zuur et al. [-@zuur2009] recommend selecting the optimal fixed-effects structure by stepwise backwards selection from the global model, we compared this approach with one using AIC$_c$-based model selection. In both cases, (and in both the duration and frequency analyses) models having different fixed effects were fitted and compared using maximum likelihood (ML) methods.
+
+We performed all calculations and statistical procedures in R (version 3.X.X; R Foundation for Statistical Computing, Vienna, Austria) using the package lme4 [@R-lme4] for functionality associated with mixed-effects modeling.
+
 -----
 
 ```{r DURfixefAICcTrials}
 
+# Trial for AICc-based selection on the fixed-effects (to compare with backwards elimination/dropwise selection).
+# Create the candidate model set.
 dur.fixef_forms <- list( int = tMins ~ 1 + ( 1 | fID ) + ( NestAge - 1 | fID ), 
                          fyr = tMins ~ fYear + ( 1 | fID ) + ( NestAge - 1 | fID ), 
                          nag = tMins ~ NestAge + ( 1 | fID ) + ( NestAge - 1 | fID ), 
@@ -1837,6 +1885,7 @@ dur.fixef_forms <- list( int = tMins ~ 1 + ( 1 | fID ) + ( NestAge - 1 | fID ),
                          no.int = tMins ~ fYear + NestAge + TempDiff + VOR_AVG + WindSpeed + Turbine_Distance_m + Roads_Distance_m + Water_Distance_m + Jday + ( 1 | fID ) + ( NestAge - 1 | fID ), 
                          global = tMins ~ fYear + NestAge * TempDiff + VOR_AVG + WindSpeed * Turbine_Distance_m + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ) + ( NestAge - 1 | fID ) )
 
+# Fit the candidate models using the fit structure established in chunk:DURranef
 dur.fixef_fits <- lapply( X = dur.fixef_forms, 
                           FUN = function( .ff ) lmer( .ff, 
                                                       data = csfullBouts, 
@@ -1844,14 +1893,16 @@ dur.fixef_fits <- lapply( X = dur.fixef_forms,
                                                                              optCtrl = list( maxfun = 2e4 ) ), 
                                                       REML = FALSE ) )
 
-dur.fixef_aicc <- sapply( X = dur.fixef_fits, FUN = AICc )
-dur.fixef_delt <- dur.fixef_aicc - min( dur.fixef_aicc )
-dur.fixef_wgts <- exp( -0.5 * dur.fixef_delt )
+# For each model, calculate:
+dur.fixef_aicc <- sapply( X = dur.fixef_fits, FUN = AICc ) # AICc
+dur.fixef_delt <- dur.fixef_aicc - min( dur.fixef_aicc ) # DeltaAICc
+dur.fixef_wgts <- exp( -0.5 * dur.fixef_delt ) # Akaike weight
 dur.fixef_wgts <- dur.fixef_wgts / sum( dur.fixef_wgts )
-dur.fixef_FEs <- sapply( X = dur.fixef_fits, FUN = function( .mm ) fetch.FE( .mm ) )
-dur.fixef_nFE <- sapply( X = dur.fixef_fits, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
-dur.fixef_nRE <- sapply( X = dur.fixef_fits, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
+dur.fixef_FEs <- sapply( X = dur.fixef_fits, FUN = function( .mm ) fetch.FE( .mm ) ) # fixed-effects structure
+dur.fixef_nFE <- sapply( X = dur.fixef_fits, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) ) # number of fixed-effects parameters
+dur.fixef_nRE <- sapply( X = dur.fixef_fits, FUN = function( .mm ) length( getME( .mm, "theta" ) ) ) # number of random-effects parameters
 
+# Make a model selection table.
 dur.fixef_selection <- data.frame( Model = names( dur.fixef_fits ), 
                                    FE = dur.fixef_FEs, 
                                    AICc = dur.fixef_aicc, 
@@ -1860,9 +1911,11 @@ dur.fixef_selection <- data.frame( Model = names( dur.fixef_fits ),
                                    nFE = dur.fixef_nFE, 
                                    nRE = dur.fixef_nRE )[ order( dur.fixef_delt ), ]
 
+# Make an abbreviated model selection table.
 dur.fixef_selection.abbrev <- dur.fixef_selection %>% 
   filter( DeltaAICc <= 10 )
 
+# Pick the top model.
 dur.mod_aicc <- update( dur.fixef_fits[[ which.min( dur.fixef_delt ) ]], 
                         REML = TRUE )
 
@@ -2012,27 +2065,27 @@ dur.predict_aicc.na.plot
 
 ```{r DURpredictRtempDiffTrial}
 
-dur.predict_aicc.td <- data.frame( TempDiff = ( seq( from = floor( min( fullBouts$TempDiff, na.rm = TRUE ) ), 
-                                                     to = ceiling( max( fullBouts$TempDiff, na.rm = TRUE ) ), 
-                                                     by = 0.5 ) - mean( fullBouts$TempDiff, na.rm = TRUE ) ) / sd( fullBouts$TempDiff, na.rm = TRUE ), 
-                                   WindSpeed = 0 )
+nd <- data.frame( TempDiff = ( seq( from = floor( min( fullBouts$TempDiff, na.rm = TRUE ) ), 
+                                    to = ceiling( max( fullBouts$TempDiff, na.rm = TRUE ) ), 
+                                    by = 0.5 ) - mean( fullBouts$TempDiff, na.rm = TRUE ) ) / sd( fullBouts$TempDiff, na.rm = TRUE ), 
+                  WindSpeed = 0 )
 
-dur.predict_aicc.boot <- bootMer( x = dur.mod_aicc, 
-                                  FUN = boot.fitter, 
-                                  nsim = 1000 )
+dur.predict_aicc.boot.td <- bootMer( x = dur.mod_aicc, 
+                                     FUN = boot.fitter, 
+                                     nsim = 1000 )
 
-dur.predict_aicc.bootCI <- t( apply( X = dur.predict_aicc.boot$t, 
+dur.predict_aicc.boot.tdCI <- t( apply( X = dur.predict_aicc.boot.td$t, 
                                      MARGIN = 2, 
                                      FUN = quantile, 
                                      probs = c( 0.025, 0.975 ) ) )
 
-dur.predict_aicc.td <- dur.predict_aicc.td %>%
+dur.predict_aicc.td <- nd %>%
   mutate( .fitted = predict( dur.mod_aicc, 
-                             newdata = dur.predict_aicc.td, 
+                             newdata = nd, 
                              re.form = ~0, 
                              type = "response" ), 
-          lo.95 = dur.predict_bootCI[ , 1 ],
-          hi.95 = dur.predict_bootCI[ , 2 ],
+          lo.95 = dur.predict_aicc.boot.tdCI[ , 1 ],
+          hi.95 = dur.predict_aicc.boot.tdCI[ , 2 ],
           TempDiff_r = ( TempDiff * sd( fullBouts$TempDiff, na.rm = TRUE ) ) + mean( fullBouts$TempDiff, na.rm = TRUE ), 
           WindSpeed_r = ( WindSpeed * sd( fullBouts$WindSpeed, na.rm = TRUE ) ) + mean( fullBouts$WindSpeed, na.rm = TRUE ), 
           .mu = exp( .fitted ), 
@@ -2046,11 +2099,11 @@ dur.predict_aicc.td.plot <- ggplot( data = dur.predict_aicc.td,
                     ymax = hi.95_r ), 
                alpha = 0.4 ) + 
   geom_line() + 
-  geom_point( data = fullBouts, 
-              inherit.aes = FALSE, 
-              aes( x = TempDiff, 
-                   y = Mins ), 
-              alpha = 0.4 ) + 
+  geom_point( data = fullBouts,
+              inherit.aes = FALSE,
+              aes( x = TempDiff,
+                   y = Mins ),
+              alpha = 0.4 ) +
   theme_classic() + 
   labs( x = "Temperature difference (°C)", 
         y = "Off-bout duration (min)" )
@@ -2061,27 +2114,27 @@ dur.predict_aicc.td.plot
 
 ```{r DURpredictRwindSpeedTrial}
 
-dur.predict_aicc.ws <- data.frame( TempDiff = 0, 
-                                   WindSpeed = ( seq( from = floor( min( fullBouts$WindSpeed, na.rm = TRUE ) ), 
-                                                     to = ceiling( max( fullBouts$WindSpeed, na.rm = TRUE ) ), 
-                                                     by = 0.5 ) - mean( fullBouts$WindSpeed, na.rm = TRUE ) ) / sd( fullBouts$WindSpeed, na.rm = TRUE ) )
+nd <- data.frame( TempDiff = 0, 
+                  WindSpeed = ( seq( from = floor( min( fullBouts$WindSpeed, na.rm = TRUE ) ), 
+                                     to = ceiling( max( fullBouts$WindSpeed, na.rm = TRUE ) ), 
+                                     by = 0.5 ) - mean( fullBouts$WindSpeed, na.rm = TRUE ) ) / sd( fullBouts$WindSpeed, na.rm = TRUE ) )
 
-dur.predict_aicc.boot <- bootMer( x = dur.mod_aicc, 
-                                  FUN = boot.fitter, 
-                                  nsim = 1000 )
+dur.predict_aicc.boot.ws <- bootMer( x = dur.mod_aicc, 
+                                     FUN = boot.fitter, 
+                                     nsim = 1000 )
 
-dur.predict_aicc.bootCI <- t( apply( X = dur.predict_aicc.boot$t, 
+dur.predict_aicc.boot.wsCI <- t( apply( X = dur.predict_aicc.boot.ws$t, 
                                      MARGIN = 2, 
                                      FUN = quantile, 
                                      probs = c( 0.025, 0.975 ) ) )
 
-dur.predict_aicc.ws <- dur.predict_aicc.ws %>%
+dur.predict_aicc.ws <- nd %>%
   mutate( .fitted = predict( dur.mod_aicc, 
-                             newdata = dur.predict_aicc.ws, 
+                             newdata = nd, 
                              re.form = ~0, 
                              type = "response" ), 
-          lo.95 = dur.predict_bootCI[ , 1 ],
-          hi.95 = dur.predict_bootCI[ , 2 ],
+          lo.95 = dur.predict_aicc.boot.wsCI[ , 1 ],
+          hi.95 = dur.predict_aicc.boot.wsCI[ , 2 ],
           TempDiff_r = ( TempDiff * sd( fullBouts$TempDiff, na.rm = TRUE ) ) + mean( fullBouts$TempDiff, na.rm = TRUE ), 
           WindSpeed_r = ( WindSpeed * sd( fullBouts$WindSpeed, na.rm = TRUE ) ) + mean( fullBouts$WindSpeed, na.rm = TRUE ), 
           .mu = exp( .fitted ), 
@@ -2723,9 +2776,9 @@ dur.avg_pred.ws.plot
 
 ```{r FREQranef}
 
-globalBoutsMod <- "numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + VOR_AVG + WindSpeed * Turbine_Distance_m + Roads_Distance_m + Water_Distance_m * Jday"
+globalBoutsMod <- "numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + VOR_AVG + ( WindSpeed + Turbine_Distance_m + blockID )^2 + Roads_Distance_m + Water_Distance_m * Jday"
 
-freqData$numBouts <- ifelse( freqData$numBouts >=1, 1, 0 )
+freqData$numBouts <- ifelse( freqData$numBouts >= 1, 1, 0 )
 
 freq.ranef_forms <- list( int = as.formula( paste( globalBoutsMod, " + ( 1 | fID )", sep = "" ) ), 
                           year = as.formula( paste( globalBoutsMod, " + ( fYear - 1 | fID )", sep = "" ) ), 
@@ -2752,6 +2805,9 @@ freq.ranef_forms <- list( int = as.formula( paste( globalBoutsMod, " + ( 1 | fID
                           turb = as.formula( paste( globalBoutsMod, " + ( Turbine_Distance_m - 1 | fID )", sep = "" ) ), 
                           turb.int = as.formula( paste( globalBoutsMod, " + ( Turbine_Distance_m | fID )", sep = "" ) ), 
                           turb_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( Turbine_Distance_m - 1 | fID )", sep = "" ) ), 
+                          blck = as.formula( paste( globalBoutsMod, " + ( blockID - 1 | fID )", sep = "" ) ), 
+                          blck.int = as.formula( paste( globalBoutsMod, " + ( blockID | fID )", sep = "" ) ), 
+                          blck_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( blockID - 1 | fID )", sep = "" ) ), 
                           road = as.formula( paste( globalBoutsMod, " + ( Roads_Distance_m - 1 | fID )", sep = "" ) ), 
                           road.int = as.formula( paste( globalBoutsMod, " + ( Roads_Distance_m | fID )", sep = "" ) ), 
                           road_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( Roads_Distance_m - 1 | fID )", sep = "" ) ), 
@@ -2765,10 +2821,11 @@ freq.ranef_forms <- list( int = as.formula( paste( globalBoutsMod, " + ( 1 | fID
                           Jday.int = as.formula( paste( globalBoutsMod, " + ( Jday | fID )", sep = "" ) ), 
                           Jday_int = as.formula( paste( globalBoutsMod, " + ( 1 | fID ) + ( Jday - 1 | fID )", sep = "" ) ) )
 
-freq.ranef <- lapply( X = freq.ranef_forms,
-                      FUN = function( .ff ) glmer( .ff,
-                                                   data = freqData,
-                                                   family = binomial( link = "logit" ) ) )
+# # Throws a fatal error: "Error: (maxstephalfit) PIRLS step-halvings failed to reduce deviance in pwrssUpdate" Also 4 convergence warnings; consider scaling.
+# freq.ranef <- lapply( X = freq.ranef_forms,
+#                       FUN = function( .ff ) glmer( .ff,
+#                                                    data = freqData,
+#                                                    family = binomial( link = "logit" ) ) )
 
 csFreqData <- freqData %>% 
   mutate( Mins = ( Mins - mean( Mins, na.rm = TRUE ) ) / sd( Mins, na.rm = TRUE ), 
@@ -2784,17 +2841,24 @@ csFreqData <- freqData %>%
           Trees_Distance_m = ( Trees_Distance_m - mean( Trees_Distance_m, na.rm = TRUE ) ) / sd( Trees_Distance_m, na.rm = TRUE ), 
           Water_Distance_m = ( Water_Distance_m - mean( Water_Distance_m, na.rm = TRUE ) ) / sd( Water_Distance_m, na.rm = TRUE ), 
           VOR_AVG = ( VOR_AVG - mean( VOR_AVG, na.rm = TRUE ) ) / sd( VOR_AVG, na.rm = TRUE ) )
+contrasts( csFreqData$blockID ) <- contr.sum( length( levels( csFreqData$blockID ) ) )
 
 freq.ranef_cs <- lapply( X = freq.ranef_forms, 
                          FUN = function( .ff ) glmer( .ff, 
                                                       data = csFreqData, 
                                                       family = binomial( link = "logit" ) ) )
 
-CC <- convCheckR( freq.ranef_cs ) # 0 warnings!?
+CC <- convCheckR( freq.ranef_cs ) # 26 warnings and at least as many minutes.
 # UnID        : NONE!
-# LargeMaxGrad: NONE!
-# LargeParGrad: NONE!
-# Singular    : all. (is that a binomial thing, perhaps?)
+# LargeMaxGrad: all year, all temp, all vor, wind.int, turb.int, all blck
+# LargeParGrad: all year, all temp, all vor, all blck
+# Singular    : a slew (but not all)
+
+# Okay. Try the optimizer used on the duration models (Nelder-Mead).
+freq.ranef_cs.plus.neldermead <- lapply( X = freq.ranef_forms, 
+                                         FUN = function( .ff ) glmer( .ff, 
+                                                                      data = csFreqData, 
+                                                                      family = binomial( link = "logit" ) ) )
 
 freq.ranef_fit <- freq.ranef_cs
 
@@ -2825,6 +2889,8 @@ freq.ranef_selection.abbrev <- freq.ranef_selection %>%
 freq.ranef_topMod <- freq.ranef_fit[[ "int" ]]
 
 ```
+
+We modeled off-bout frequency as the log-likelihood that a hen initiated an off-bout during a particular 3-hour block of time during the recording period (*i.e.*, from the time of the first recorded off-bout until the nest was presumed to have hatched or failed). The latter model assumed a Bernoulli error distribution and logit link function.
 
 ```{r FREQfixefSelection}
 
@@ -3171,7 +3237,7 @@ freq.predict_jd.plot <- ggplot( data = freq.predict_jd,
 # ----past tense
 # ----clear, concise, organized
 # ----not repetetive of methods
-# ----describe quantitatively rather than quantitatively only
+# ----describe qualitatively rather than quantitatively only
 # ----avoids synthesis more properly included in discussion
 # --includes
 # ----quantitative presentation of results
@@ -3179,6 +3245,10 @@ freq.predict_jd.plot <- ggplot( data = freq.predict_jd,
 
 # --# obs/group, etc.
 ```
+
+We recorded `r nrow(bouts)` incubation off-bouts at `r length(unique(bouts$id))` nests. Eight nests (representing `r sum(is.na(bouts$NestAge))` off-bouts) could not be reliably aged, as they were not located until after clutch completion and failed prior to hatching. Because we considered nest age a potentially important factor for hens making behavioral decisions regarding incubation, data from those nests was not considered further.
+
+The top-ranked random-effects structure for off-bout duration included both a random intercept and a random slope of the effect of 
 
 ###**DISCUSSION** {#discussion}
 
