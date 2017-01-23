@@ -1,10 +1,8 @@
 ### QUESTIONS ###
 
-√ How best to compare competing metrics for a similar ecological variable (e.g., AmbientTemp vs. TempDiff) as predictors in a model set? Include both in the global model?
+√ How best to compare competing metrics for a similar ecological variable (e.g., AmbientTemp vs. TempDiff) as predictors in a model set? Include both in the global model? Pick one.
 
-√ How best to go about fixing convergence warnings. Re-scaling seems to make matters worse.
-
-√ Contrasts on the grouping variable?
+√ Contrasts on the grouping variable? No.
 
 Make mention that bout duration doesn't vary over course of incubation period (lm(Mins~NestAge, data = bouts))
 
@@ -21,4 +19,9 @@ Compare the following:
 convCheckR( dur.ranef_topMod )
 convCheckR( dur.fixef_baseMod )
 
-Top random-effects structure includes an interaction (( 1 | fID ) + ( NestAge * TempDiff - 1 | fID )), but that interaction is quick to fall out of the fixed effects during stepwise elimination (second iteration: NestAge:TempDiff p = 0.86895).
+
+### MODEL-SELECTION
+
+√ Top random-effects structure includes an interaction (( 1 | fID ) + ( NestAge * TempDiff - 1 | fID )), but that interaction is quick to fall out of the fixed effects during stepwise elimination (second iteration: NestAge:TempDiff p = 0.86895).
+
+√ Variable included in the top-ranked random-effects structure (NestAge in ( 1 | fID ) + ( NestAge - 1 | fID )) ends up being insignificant during stepwise elimination (p=0.1648); next-least-significant term has p=0.0127

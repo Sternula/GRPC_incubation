@@ -214,7 +214,7 @@ convCheckR <- function( .lmer ){
 fetch.RE <- function( .mm, as.form = FALSE ){
   .rhs <- as.character( .mm@call$formula[[ 3 ]] )
   .fe <- .rhs[ 2 ]
-  .re <- stringr::str_extract_all( .fe, "\\(.+?\\)" )[[ 1 ]]
+  .re <- stringr::str_extract_all( .fe, "\\([\\w\\s\\.]+\\|[\\w\\s\\.]+\\)" )[[ 1 ]]
   .re <- c( .re, .rhs[ 3 ] )
   if( as.form ) .re <- paste( .re, collapse = " + " )
   return( .re )
@@ -223,7 +223,7 @@ fetch.RE <- function( .mm, as.form = FALSE ){
 # fetch.FE returns the fixed-effects component(s) from a merMod as a character vector
 fetch.FE <- function( .mm ){
   .rhs <- as.character( .mm@call$formula[[ 3 ]] )
-  .fe <- stringr::str_split_fixed( .rhs[ 2 ], "\\ \\+\\ \\(", n = 2 )[ 1 ]
+  .fe <- stringr::str_split_fixed( .rhs[ 2 ], "\\ \\+\\ \\([\\w\\s\\.]+\\|", n = 2 )[ 1 ]
   return( .fe )
 }
 
@@ -2843,30 +2843,58 @@ csFreqData <- freqData %>%
           VOR_AVG = ( VOR_AVG - mean( VOR_AVG, na.rm = TRUE ) ) / sd( VOR_AVG, na.rm = TRUE ) )
 contrasts( csFreqData$blockID ) <- contr.sum( length( levels( csFreqData$blockID ) ) )
 
-freq.ranef_cs <- lapply( X = freq.ranef_forms, 
-                         FUN = function( .ff ) glmer( .ff, 
-                                                      data = csFreqData, 
-                                                      family = binomial( link = "logit" ) ) )
-
-CC <- convCheckR( freq.ranef_cs ) # 26 warnings and at least as many minutes.
-# UnID        : NONE!
-# LargeMaxGrad: all year, all temp, all vor, wind.int, turb.int, all blck
-# LargeParGrad: all year, all temp, all vor, all blck
+# freq.ranef_cs <- lapply( X = freq.ranef_forms, 
+#                          FUN = function( .ff ) glmer( .ff, 
+#                                                       data = csFreqData, 
+#                                                       family = binomial( link = "logit" ) ) )
+# 
+# # CC <- convCheckR( freq.ranef_cs ) # 24 warnings and at least as many minutes.
+# # UnID        : NONE!
+# # LargeMaxGrad: year_int, all temp, wind.int, turb.int, all blck
+# # LargeParGrad: year_int, all temp, wind.int, turb.int, all blck
 # Singular    : a slew (but not all)
 
-# Okay. Try the optimizer used on the duration models (Nelder-Mead).
-freq.ranef_cs.plus.neldermead <- lapply( X = freq.ranef_forms, 
+if( !exists( "freq.ranef_cs.plus.bobyqa" ) ){
+  
+  if( length( fl <- list.files( pattern = "freq.ranef_cs.plus.bobyqa.RData", recursive = TRUE ) ) > 0 ){
+    load( fl )
+  } else {
+    # Okay. Try the bobyqa optimizer.
+    freq.ranef_cs.plus.bobyqa <- lapply( X = freq.ranef_forms, 
                                          FUN = function( .ff ) glmer( .ff, 
                                                                       data = csFreqData, 
-                                                                      family = binomial( link = "logit" ) ) )
+                                                                      family = binomial( link = "logit" ), 
+                                                                      control = glmerControl( optimizer = "bobyqa", 
+                                                                                              optCtrl = list( maxfun = 2e4 ) ) ) )
+    save( freq.ranef_cs.plus.bobyqa, file = "data/freq.ranef_cs.plus.bobyqa.RData" )
+  }
+}
 
-freq.ranef_fit <- freq.ranef_cs
+# CC <- convCheckR( freq.ranef_cs.plus.bobyqa ) # 12 warnings
+# UnID        : all year
+# LargeMaxGrad: year, temp.int, wind.int, turb.int
+# LargeParGrad: wind.int
+# Singular    : all but temp, vor, wind, and turb
+
+# freq.ranef_cs.plus.neldermead <- lapply( X = freq.ranef_forms, 
+#                                          FUN = function( .ff ) glmer( .ff, 
+#                                                                       data = csFreqData, 
+#                                                                       family = binomial( link = "logit" ), 
+#                                                                       control = glmerControl( optimizer = "Nelder_Mead", 
+#                                                                                               optCtrl = list( maxfun = 2e4 ) ) ) )
+# 
+# # CC <- convCheckR( freq.ranef_cs.plus.neldermead ) # 24 warnings in 8 hours
+# # UnID        : NONE!
+# # LargeMaxGrad: all temp, all vor, turb, turb_int, all blck
+# # LargeParGrad: all temp, all vor, turb, turb_int, all blck
+# # Singular    : a slew (but not all)
+
+freq.ranef_fit <- freq.ranef_cs.plus.bobyqa
 
 ```
 
 ```{r FREQranefSelection}
 
-op <- AICcmodavg::c_hat( freq.ranef_fit[[ length( freq.ranef_fit ) ]] )
 freq.ranef_aicc <- sapply( X = freq.ranef_fit, FUN = AICc )
 freq.ranef_delt <- freq.ranef_aicc - min( freq.ranef_aicc )
 freq.ranef_wgts <- exp( -0.5 * freq.ranef_delt )
@@ -2886,7 +2914,7 @@ freq.ranef_selection <- data.frame( Model = names( freq.ranef_aicc ),
 freq.ranef_selection.abbrev <- freq.ranef_selection %>% 
   filter( DeltaAICc <= 10 )
 
-freq.ranef_topMod <- freq.ranef_fit[[ "int" ]]
+freq.ranef_topMod <- freq.ranef_fit[[ which.min( freq.ranef_delt ) ]]
 
 ```
 
@@ -2894,114 +2922,176 @@ We modeled off-bout frequency as the log-likelihood that a hen initiated an off-
 
 ```{r FREQfixefSelection}
 
-# ## ITERATION 1: ##
-# 
-# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + VOR_AVG + WindSpeed * Turbine_Distance_m + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ), 
-#                      family = binomial( link = "logit" ), 
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: VOR_AVG (p=0.985825)
+freq.fixef_forms <- list( int = numBouts ~ 1 + ( blockID | fID ), 
+                          fyr = numBouts ~ fYear + ( blockID | fID ), 
+                          nag = numBouts ~ NestAge + ( blockID | fID ), 
+                          tmp = numBouts ~ AmbientTemp + ( blockID | fID ), 
+                          pcp = numBouts ~ Precipitation + ( blockID | fID ), 
+                          vor = numBouts ~ VOR_AVG + ( blockID | fID ), 
+                          wsp = numBouts ~ WindSpeed + ( blockID | fID ), 
+                          trb = numBouts ~ Turbine_Distance_m + ( blockID | fID ), 
+                          blk = numBouts ~ blockID + ( blockID | fID ), 
+                          rdd = numBouts ~ Roads_Distance_m + ( blockID | fID ), 
+                          wtd = numBouts ~ Water_Distance_m + ( blockID | fID ), 
+                          jdy = numBouts ~ Jday + ( blockID | fID ), 
+                          nag.tmp = numBouts ~ NestAge * AmbientTemp + ( blockID | fID ), 
+                          nag_tmp = numBouts ~ NestAge + AmbientTemp + ( blockID | fID ), 
+                          ws.td = numBouts ~ WindSpeed * Turbine_Distance_m + ( blockID | fID ), 
+                          ws_td = numBouts ~ WindSpeed + Turbine_Distance_m + ( blockID | fID ), 
+                          td.bk = numBouts ~ Turbine_Distance_m * blockID + ( blockID | fID ), 
+                          td_bk = numBouts ~ Turbine_Distance_m + blockID + ( blockID | fID ), 
+                          ws.bk = numBouts ~ WindSpeed * blockID + ( blockID | fID ), 
+                          ws_bk = numBouts ~ WindSpeed + blockID + ( blockID | fID ), 
+                          ws.td.bk = numBouts ~ ( WindSpeed + Turbine_Distance_m + blockID )^2 + ( blockID | fID ), 
+                          ws_td_bk = numBouts ~ WindSpeed + Turbine_Distance_m + blockID + ( blockID | fID ), 
+                          ws_td.bk = numBouts ~ WindSpeed + Turbine_Distance_m * blockID + ( blockID | fID ), 
+                          ws.td_bk = numBouts ~ WindSpeed * Turbine_Distance_m + blockID + ( blockID | fID ), 
+                          ws.bk_td = numBouts ~ WindSpeed * blockID + Turbine_Distance_m + ( blockID | fID ),
+                          wtd.jdy = numBouts ~ Water_Distance_m * Jday + ( blockID | fID ), 
+                          wtd_jdy = numBouts ~ Water_Distance_m + Jday + ( blockID | fID ), 
+                          no.blk = numBouts ~ NestAge * AmbientTemp + WindSpeed * Turbine_Distance_m + blockID + ( blockID | fID ), 
+                          whole = numBouts ~ NestAge * AmbientTemp + ( WindSpeed + Turbine_Distance_m + blockID )^2 + ( blockID | fID ), 
+                          no.int = numBouts ~ fYear + NestAge + AmbientTemp + Precipitation + VOR_AVG + WindSpeed + Turbine_Distance_m + blockID + Roads_Distance_m + Water_Distance_m + Jday + ( blockID | fID ), 
+                          global = numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + VOR_AVG + ( WindSpeed + Turbine_Distance_m + blockID )^2 + Roads_Distance_m + Water_Distance_m * Jday + ( blockID | fID ) )
 
-# ## ITERATION 2: ##
-# 
-# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + WindSpeed * Turbine_Distance_m + Roads_Distance_m + Water_Distance_m * Jday + ( 1 | fID ),
-#                      family = binomial( link = "logit" ),
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: Roads_Distance_m (p=0.711681)
+if( !exists( "freq.fixef_fits" ) ){
+  if( length( fl <- list.files( pattern = "freq.fixef_fits.RData", recursive = TRUE ) ) > 0 ){
+    load( fl )
+  } else {
+    freq.fixef_fits <- lapply( X = freq.fixef_forms, 
+                               FUN = function( .ff ) glmer( .ff, 
+                                                            family = binomial( link = "logit" ), 
+                                                            data = csFreqData, 
+                                                            control = glmerControl( optimizer = "bobyqa", 
+                                                                                    optCtrl = list( maxfun = 2e4 ) ) ) )
+    save( freq.fixef_fits, file = "data/freq.fixef_fits.RData" )
+  }
+  
+}
 
-# ## ITERATION 3: ##
-# 
-# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + WindSpeed * Turbine_Distance_m + Water_Distance_m * Jday + ( 1 | fID ),
-#                      family = binomial( link = "logit" ),
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: Water_Distance_m:Jday (p=0.621493)
 
-# ## ITERATION 4: ##
-# 
-# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + WindSpeed * Turbine_Distance_m + Water_Distance_m + Jday + ( 1 | fID ),
-#                      family = binomial( link = "logit" ),
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: WindSpeed:Turbine_Distance_m (p=0.537227)
+freq.fixef_aicc <- sapply( X = freq.fixef_fits, FUN = AICc )
+freq.fixef_delt <- freq.fixef_aicc - min( freq.fixef_aicc )
+freq.fixef_wgts <- exp( -0.5 * freq.fixef_delt )
+freq.fixef_wgts <- freq.fixef_wgts / sum( freq.fixef_wgts )
+freq.fixef_FEs <- sapply( X = freq.fixef_fits, FUN = function( .mm ) fetch.FE( .mm ) )
+freq.fixef_nFE <- sapply( X = freq.fixef_fits, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
+freq.fixef_nRE <- sapply( X = freq.fixef_fits, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
 
-# ## ITERATION 5: ##
-# 
-# freq.fixef <- glmer( numBouts ~ fYear + NestAge * AmbientTemp + Precipitation + WindSpeed + Turbine_Distance_m + Water_Distance_m + Jday + ( 1 | fID ),
-#                      family = binomial( link = "logit" ),
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: NestAge:AmbientTemp (p=0.512824)
+freq.fixef_selection <- data.frame( Model = names( freq.fixef_aicc ), 
+                                    FE = freq.fixef_FEs, 
+                                    AICc = freq.fixef_aicc, 
+                                    DeltaAICc = freq.fixef_delt, 
+                                    AWt = freq.fixef_wgts, 
+                                    nFE = freq.fixef_nFE, 
+                                    nRE = freq.fixef_nRE )[ order( freq.fixef_delt ), ]
 
-# ## ITERATION 6: ##
-# 
-# freq.fixef <- glmer( numBouts ~ fYear + NestAge + AmbientTemp + Precipitation + WindSpeed + Turbine_Distance_m + Water_Distance_m + Jday + ( 1 | fID ),
-#                      family = binomial( link = "logit" ),
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: Water_Distance_m (p=0.368459)
+freq.fixef_selection.abbrev <- freq.fixef_selection %>% 
+  filter( DeltaAICc <= 10 )
 
-# ## ITERATION 7: ##
-# 
-# freq.fixef <- glmer( numBouts ~ fYear + NestAge + AmbientTemp + Precipitation + WindSpeed + Turbine_Distance_m + Jday + ( 1 | fID ),
-#                      family = binomial( link = "logit" ),
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: AmbientTemp (p=0.294402)
-
-# ## ITERATION 8: ##
-# 
-# freq.fixef <- glmer( numBouts ~ fYear + NestAge + Precipitation + WindSpeed + Turbine_Distance_m + Jday + ( 1 | fID ),
-#                      family = binomial( link = "logit" ),
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: fYear (p=0.167429)
-
-# ## ITERATION 9: ##
-# 
-# freq.fixef <- glmer( numBouts ~ NestAge + Precipitation + WindSpeed + Turbine_Distance_m + Jday + ( 1 | fID ),
-#                      family = binomial( link = "logit" ),
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: Turbine_Distance_m (p=0.127381)
-
-# ## ITERATION 10: ##
-# 
-# freq.fixef <- glmer( numBouts ~ NestAge + Precipitation + WindSpeed + Jday + ( 1 | fID ),
-#                      family = binomial( link = "logit" ),
-#                      data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: Precipitation (p=0.062821)
-
-# ## ITERATION 11: ##
-# 
-freq.fixef <- glmer( numBouts ~ NestAge + WindSpeed + Jday + ( 1 | fID ),
-                     family = binomial( link = "logit" ),
-                     data = csFreqData )
-# 
-# summary( freq.fixef ) # least significant term: NestAge (p=0.029678)
-
-freq.mod_be <- freq.fixef
+freq.mod_aicc <- freq.fixef_fits[[ which.min( freq.fixef_delt ) ]]
 
 ```
 
+```{r FREQfixefAICcSets}
+
+freq.sets <- c( A = "fYear", 
+                B = "NestAge * AmbientTemp", 
+                C = "Precipitation + VOR_AVG", 
+                D = "( WindSpeed + Turbine_Distance_m + blockID )^2", 
+                E = "Roads_Distance_m + Water_Distance_m * Jday" )
+ranf <- "( blockID | fID )"
+
+freq.set_forms <- lapply( X = unlist( list( t0 = "1", 
+                                            t1 = lapply( X = combn( freq.sets, m = 1, simplify = FALSE ), 
+                                                         FUN = function( .f ) paste( .f, collapse = " + " ) ), 
+                                            t2 = lapply( X = combn( freq.sets, m = 2, simplify = FALSE ), 
+                                                         FUN = function( .f ) paste( .f, collapse = " + " ) ), 
+                                            t3 = lapply( X = combn( freq.sets, m = 3, simplify = FALSE ), 
+                                                         FUN = function( .f ) paste( .f, collapse = " + " ) ), 
+                                            t4 = lapply( X = combn( freq.sets, m = 4, simplify = FALSE ), 
+                                                         FUN = function( .f ) paste( .f, collapse = " + " ) ), 
+                                            t5 = lapply( X = combn( freq.sets, m = 5, simplify = FALSE ), 
+                                                         FUN = function( .f ) paste( .f, collapse = " + " ) ) ), 
+                                      recursive = FALSE ), 
+                          FUN = function( .ff ) reformulate( paste( .ff, ranf, sep = " + " ), 
+                                                             response = "numBouts" ) )
+
+if( !exists( "freq.set_fits" ) ){
+  if( length( fl <- list.files( pattern = "freq.set_fits.RData", recursive = TRUE ) ) > 0 ){
+    load( fl )
+  } else {
+    freq.set_fits <- lapply( X = freq.set_forms, 
+                             FUN = function( .ff ) glmer( .ff, 
+                                                          family = binomial( link = "logit" ), 
+                                                          data = csFreqData, 
+                                                          control = glmerControl( optimizer = "bobyqa", 
+                                                                                  optCtrl = list( maxfun = 2e4 ) ) ) )
+    save( freq.set_fits, file = "data/freq.set_fits.RData" )
+  }
+}
+
+freq.set_aicc <- lapply( X = freq.set_fits, FUN = AICc )
+freq.set_delt <- freq.set_aicc - min( freq.set_aicc )
+freq.set_wgts <- exp( -0.5 * freq.set_delt )
+freq.set_wgts <- freq.set_wgts / sum( freq.set_wgts )
+freq.set_FEs <- sapply( X = freq.set_fits, FUN = fetch.FE )
+freq.set_nFE <- sapply( X = freq.set_fits, FUN = function( .mm ) length( getME( .mm, "fixef" ) ) )
+freq.set_nRE <- sapply( X = freq.set_fits, FUN = function( .mm ) length( getME( .mm, "theta" ) ) )
+
+freq.set_selection <- data.frame( Model = names( freq.set_aicc ), 
+                                  FE = freq.set_FEs, 
+                                  AICc = freq.set_aicc, 
+                                  DeltaAICc = freq.set_delt, 
+                                  AWt = freq.set_wgts, 
+                                  nFE = freq.set_nFE, 
+                                  nRE = freq.set_nRE )[ order( freq.set_delt ), ]
+
+```
+
+```{r FREQfixefAvgR}
+
+freq.fixef_ests <- map2_df( .x = freq.set_fits, 
+                            .y = names( freq.set_fits ), 
+                            .f = tidy_w_name ) %>% 
+  complete( term, name ) %>% 
+  left_join( freq.set_selection[ , c( "Model", "AWt" ) ], by = c( "name" = "Model" ) )
+
+freq.fixef_ests[ is.na( freq.fixef_ests$estimate ), c( "estimate", "std.error" ) ] <- 0
+
+freq.fixef_ests <- freq.fixef_ests %>%
+  group_by( term ) %>%
+  mutate( wnorm = AWt / sum( AWt ),
+          var_est = std.error^2 ) %>%
+  summarize( avg_est = sum( estimate * wnorm ),
+             avg_var = sum( wnorm * ( var_est + ( estimate - avg_est )^2 ) ), 
+             avg_SE = sqrt( avg_var ), 
+             tstat = avg_est / avg_SE, 
+             p.val = 2 * pt( q = abs( tstat ), 
+                             df = min( sapply( X = dur.fixef_fits.set, 
+                                               FUN = df.residual ) ), 
+                             lower.tail = FALSE ) )
+
+```
+
+
 ```{r FREQvalidatR}
 
-freq.test <- augment( freq.mod_be ) %>% 
+freq.test_aicc <- augment( freq.mod_aicc ) %>% 
   mutate( NestAge = ( NestAge * sd( freqData$NestAge, na.rm = TRUE ) ) + mean( freqData$NestAge, na.rm = TRUE ), 
+          AmbientTemp = ( AmbientTemp * sd( freqData$AmbientTemp, na.rm = TRUE ) ) + mean( freqData$AmbientTemp, na.rm = TRUE ), 
           WindSpeed = ( WindSpeed * sd( freqData$WindSpeed, na.rm = TRUE ) ) + mean( freqData$WindSpeed, na.rm = TRUE ), 
-          Jday = ( Jday * sd( freqData$Jday, na.rm = TRUE ) ) + mean( freqData$Jday, na.rm = TRUE ), 
-          .std.resid = std.resid.glmer( freq.mod_be ), 
-          .qresid = qres2( freq.mod_be ), 
-          .hat = hatvalues( freq.mod_be ) ) %>% 
+          Turbine_Distance_m = ( Turbine_Distance_m * sd( freqData$Turbine_Distance_m, na.rm = TRUE ) ) + mean( freqData$Turbine_Distance_m, na.rm = TRUE ), 
+          .std.resid = std.resid.glmer( freq.mod_aicc ), 
+          .qresid = qres2( freq.mod_aicc ), 
+          .hat = hatvalues( freq.mod_aicc ) ) %>% 
   dplyr::select( -.rownames )
 # ests <- influence.ME::influence( freq.mod_be, obs = TRUE )
-# dur.test$.cooksd <- cooks.distance( ests )[ which( !is.na( freqData$WindSpeed ) & !is.na( freqData$NestAge ) ) ]
+# freq.test_aicc$.cooksd <- cooks.distance( ests )[ which( !is.na( freqData$WindSpeed ) & !is.na( freqData$NestAge ) ) ]
 
-rVf_freq <- ggplot( data = freq.test, 
-                    aes( x = .fitted, 
-                         y = .qresid ) ) + 
+rVf_freq.aicc <- ggplot( data = freq.test_aicc, 
+                         aes( x = .fitted, 
+                              y = .qresid ) ) + 
   geom_smooth( colour = "seashell4" ) + 
   geom_hline( yintercept = 0, 
               linetype = "dashed" ) + 
@@ -3011,13 +3101,13 @@ rVf_freq <- ggplot( data = freq.test,
         y = "Randomized quantile residuals" ) + 
   theme( text = element_text( size = 12 ) )
 
-y <- quantile( x = freq.test$.qresid, probs = c( 0.25, 0.75 ) )
+y <- quantile( x = freq.test_aicc$.qresid, probs = c( 0.25, 0.75 ) )
 x <- qnorm( p = c( 0.25, 0.75 ) )
 slope <- diff( y ) / diff( x )
 int <- y[ 1L ] - ( slope * x[ 1L ] )
 
-qq_freq <- ggplot( data = freq.test, 
-                   aes( sample = .qresid ) ) + 
+qq_freq.aicc <- ggplot( data = freq.test_aicc, 
+                        aes( sample = .qresid ) ) + 
   geom_abline( slope = slope, 
                intercept = int, 
                colour = "tomato" ) + 
@@ -3027,9 +3117,9 @@ qq_freq <- ggplot( data = freq.test,
         y = "Randomized quantile r residuals" ) + 
   theme( text = element_text( size = 12 ) )
 
-sl_freq <- ggplot( data = freq.test, 
-                   aes( x = .fitted, 
-                        y = sqrt( abs( .qresid ) ) ) ) + 
+sl_freq.aicc <- ggplot( data = freq.test_aicc, 
+                        aes( x = .fitted, 
+                             y = sqrt( abs( .qresid ) ) ) ) + 
   geom_smooth( colour = "seashell4" ) + 
   geom_hline( yintercept = 1, 
               linetype = "dashed" ) + 
@@ -3039,9 +3129,9 @@ sl_freq <- ggplot( data = freq.test,
         y = "√|Randomized quantile residuals|" ) + 
   theme( text = element_text( size = 12 ) )
 
-lev_freq <- ggplot( data = freq.test, 
-                    aes( x = .hat, 
-                         y = .qresid ) ) + 
+lev_freq.aicc <- ggplot( data = freq.test_aicc, 
+                         aes( x = .hat, 
+                              y = .qresid ) ) + 
   geom_hline( yintercept = 0,
               size = 1,
               colour = "grey" ) +
@@ -3053,73 +3143,103 @@ lev_freq <- ggplot( data = freq.test,
   labs( x = "Leverage",
         y = "Randomized quantile residuals" )
 
-cowplot::plot_grid( rVf_freq, qq_freq, sl_freq, lev_freq, nrow = 2, labels = "AUTO" )
+cowplot::plot_grid( rVf_freq.aicc, qq_freq.aicc, sl_freq.aicc, lev_freq.aicc, nrow = 2, labels = "AUTO" )
 
 ```
 
 ```{r FREQcheckR}
 
-rVna <- ggplot( data = freq.test, 
-                aes( x = NestAge, 
-                     y = .qresid ) ) + 
+rVna_freq.aicc <- ggplot( data = freq.test_aicc, 
+                          aes( x = NestAge, 
+                               y = .qresid ) ) + 
+  geom_hline( colour = "grey", 
+              linetype = "dashed" ) + 
   geom_point( alpha = 0.4 ) + 
   theme_classic() + 
   labs( x = "Nest age (d)", 
         y = "Randomized quantile residuals" )
 
-rVws <- ggplot( data = freq.test, 
-                aes( x = WindSpeed, 
-                     y = .qresid ) ) + 
+rVat_freq.aicc <- ggplot( data = freq.test_aicc, 
+                          aes( x = AmbientTemp, 
+                               y = .qresid ) ) + 
+  geom_hline( colour = "grey", 
+              linetype = "dashed" ) + 
+  geom_point( alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Ambient temperature (°C)", 
+        y = "Randomized quantile residuals" )
+
+rVws_freq.aicc <- ggplot( data = freq.test_aicc, 
+                          aes( x = WindSpeed, 
+                               y = .qresid ) ) + 
+  geom_hline( colour = "grey", 
+              linetype = "dashed" ) + 
   geom_point( alpha = 0.4 ) + 
   theme_classic() + 
   labs( x = "Wind speed (mph)", 
         y = "Randomized quantile residuals" )
 
-rVjd <- ggplot( data = freq.test, 
-                aes( x = Jday, 
-                     y = .qresid ) ) + 
+rVtd_freq.aicc <- ggplot( data = freq.test_aicc, 
+                          aes( x = Turbine_Distance_m, 
+                               y = .qresid ) ) + 
+  geom_hline( colour = "grey", 
+              linetype = "dashed" ) + 
   geom_point( alpha = 0.4 ) + 
   theme_classic() + 
-  labs( x = "Ordinal date", 
+  labs( x = "Distance to nearest turbine (m)", 
         y = "Randomized quantile residuals" )
 
-fVo <- ggplot( data = freq.test, 
-               aes( x = as.factor( numBouts ), 
-                    y = .mu ) ) + 
+rVbk_freq.aicc <- ggplot( data = freq.test_aicc, 
+                          aes( x = blockID, 
+                               y = .qresid ) ) + 
+  geom_boxplot( fill = "grey24", 
+                outlier.alpha = 0.4 ) + 
+  theme_classic() + 
+  labs( x = "Time block", 
+        y = "Randomized quantile residuals" )
+
+fVo_freq.aicc <- ggplot( data = freq.test_aicc, 
+                         aes( x = as.factor( numBouts ), 
+                              y = .mu ) ) + 
   geom_boxplot( outlier.alpha = 0.4, 
                 fill = "grey24" ) + 
   theme_classic() + 
   labs( x = "Observed off-bout occurrence", 
         y = "Predicted probability of off-bout occurrence" )
 
-cowplot::plot_grid( rVna, rVws, rVjd, fVo, nrow = 2, labels = "AUTO" )
+cowplot::plot_grid( rVna_freq.aicc, rVat_freq.aicc, rVws_freq.aicc, rVtd_freq.aicc, rVbk_freq.aicc, fVo_freq.aicc, nrow = 2, labels = "AUTO" )
 
 ```
 
 ```{r FREQpredictRwindSpeed}
 
 nd <- expand.grid( NestAge = 0, 
+                   AmbientTemp = 0, 
                    WindSpeed = ( seq( from = floor( min( freqData$WindSpeed, na.rm = TRUE ) ), 
                                       to = ceiling( max( freqData$WindSpeed, na.rm = TRUE ) ), 
                                       by = 0.5 ) - mean( freqData$WindSpeed, na.rm = TRUE ) ) / sd( freqData$WindSpeed, na.rm = TRUE ), 
-                   Jday = 0 )
+                   Turbine_Distance_m = ( c( 500, 1000, 5000, 10000, 20000 ) - mean( freqData$Turbine_Distance_m, na.rm = TRUE ) ) / sd( freqData$Turbine_Distance_m, na.rm = TRUE ), 
+                   blockID = factor( levels( freqData$blockID ), levels = levels( freqData$blockID ) ) )
+contrasts( nd$blockID ) <- contr.sum( length( levels( nd$blockID ) ) )
 
 freq.predict_ws <- nd %>%
-  mutate( .mu = predict( freq.mod_be, 
+  mutate( .mu = predict( freq.mod_aicc, 
                          newdata = nd, 
                          re.form = ~0, 
                          type = "response" ), 
-          lo.95 = dur.predict_bootCI[ , 1 ],
-          hi.95 = dur.predict_bootCI[ , 2 ],
+          # lo.95 = freq.predict_bootCI[ , 1 ],
+          # hi.95 = freq.predict_bootCI[ , 2 ],
           NestAge_r = ( NestAge * sd( freqData$NestAge, na.rm = TRUE ) ) + mean( freqData$NestAge, na.rm = TRUE ), 
+          AmbientTemp_r = ( AmbientTemp * sd( freqData$AmbientTemp, na.rm = TRUE ) ) + mean( freqData$AmbientTemp, na.rm = TRUE ), 
           WindSpeed_r = ( WindSpeed * sd( freqData$WindSpeed, na.rm = TRUE ) ) + mean( freqData$WindSpeed, na.rm = TRUE ), 
-          Jday_r = ( Jday * sd( freqData$Jday, na.rm = TRUE ) ) + mean( freqData$Jday, na.rm = TRUE ), 
+          Turbine_Distance_m_r = ( Turbine_Distance_m * sd( freqData$Turbine_Distance_m, na.rm = TRUE ) ) + mean( freqData$Turbine_Distance_m, na.rm = TRUE ), 
           lo.95_r = exp( lo.95 ), 
           hi.95_r = exp( hi.95 ) )
 
 freq.predict_ws.plot <- ggplot( data = freq.predict_ws, 
                                 aes( x = WindSpeed_r, 
-                                     y = .mu ) ) + 
+                                     y = .mu, 
+                                     linetype = factor( Turbine_Distance_m_r ) ) ) + 
   geom_line() + 
   geom_rug( data = filter( freqData, numBouts > 0 ), 
             inherit.aes = FALSE, 
@@ -3135,7 +3255,9 @@ freq.predict_ws.plot <- ggplot( data = freq.predict_ws,
             alpha = 0.4 ) + 
   theme_classic() + 
   labs( x = "Wind speed (mph)", 
-        y = "Probability of off-bout initiation" )
+        y = "Probability of off-bout initiation", 
+        linetype = "Distance to nearest turbine (m)" ) + 
+  facet_wrap( ~blockID )
 
 ```
 
