@@ -240,7 +240,7 @@ std.resid.glmer <- function( .glmer ){
   ms <- sum( dev.resid^2 ) / df.residual( .glmer )
   
   # Calculate standardized residuals (based on eqn. of p. 65 in Zuur et al. 2007).
-  std.resid <- dev.resid / sqrt( ms * ( 1 - hatvalues( .glmer ) ) )
+  std.resid <- dev.resid / sqrt( abs( ms * ( 1 - hatvalues( .glmer ) ) ) )
   
   return( std.resid )
   
@@ -1437,17 +1437,19 @@ The study site encompasses a wind energy facility owned and operated by the Nebr
 
 ####**Field Methods** {#fieldmethods}
 
-We placed Thermochron$^{\circledR}$ iButton$^{\circledR}$ temperature loggers (model DS1921G; Maxim Integrated, San Jose, CA, USA; hereafter iButtons) in prairie-chicken nests to record nest temperature at 4-minute intervals. The iButtons were placed variously before or after clutch completion (and initiation of incubation) depending upon when the nest was located, and were retrieved after the eggs hatched or the nest failed (or was abandoned). Consequently, not all nests were monitored throughout the entire 28-day incubation period.
+We fitted female prairie-chickens with necklace-style very high frequency (VHF) radio transmitters (**<< model no.? >>**; Advanced Telemetry Systems Inc., Isanti, MN, USA) during the pre-nesting period and identified their locations five to seven times per week by radio telemetry (see @olney2015). When the location of an individual hen went unchanged over a three-day period, we approached the location on foot to determine whether or not a nest was present. Upon locating a nest, we recorded its coordinates with a handheld global positioning system (GPS) device (Etrex Vista, Garmin International Inc., Olathe, KS, USA). At a subset of the nests, we placed Thermochron$^{\circledR}$ iButton$^{\circledR}$ temperature loggers (model DS1922L; Maxim Integrated, Dallas, TX, USA; hereafter iButtons) at the nest edge to record nest temperature at four-minute intervals. Each iButton was wrapped in a fine mesh cloth, tied to a thick wire which was pushed into the ground, and concealed with nesting material. The iButtons were placed variously before or after clutch completion (and initiation of incubation) depending upon when the nest was located, and were retrieved after the eggs hatched or the nest failed (or was abandoned).
 
-**<< Methods on spatial data? >>**
+Throughout the incubation period, we monitored each nest daily from a distance of at least 30 m. When a hen was found to be away from her nest on three consecutive days, we again approached the nest on foot to assess the nest fate. For nests that successfully hatched, we calculated approximate date of initiation of incubation based on a 28-day incubation period. This date served as the basis for determining the nest age as used in the off-bout analysis.
+
+At least five days after first locating each nest (or on the estimated date of clutch completion), we returned to conduct vegetation sampling at the nest site. With a Robel pole placed at the center of the nest bowl, we performed a visual obstruction reading (VOR) from each of the four cardinal directions [@robel1970]. The average VOR for each nest was calculated as the arithmetic mean of the four readings. In addition, we accessed weather data (including ambient temperature, precipitation, and wind speed) recorded every 20 min at the nearby Ainsworth Regional Airport (**<< source? NRCC? >>**). **<< Methods on spatial data? >>**
 
 ####**Data Analyses** {#datamethods}
 
-We **<< manually? >>** identified off-bouts and measured their duration from iButton temperature data in Raven Pro (Version 1.5; Cornell Lab of Ornithology, Ithaca, NY, USA), using Rhythm [@cooper2005] to convert the files into an appropriate format. We defined off-bouts from the time of the temperature recording just prior to the bird's departure from the nest (indicated by a sudden decrease in temperature in the time-series) until the time of the recording made just prior to her return (indicated by a sharp rise in temperature). Because the precise signature of off-bouts varied, we based our classification on the following criteria: (1) a minimum duration of 10 minutes, (2) a total temperature difference of at least 2°C, and (3) a minimum initial absolute slope in the temperature--time plot of 0.1°C/minute (0.4°C between sequential recordings). **<< These criteria are from Cole's poster (w/ #1 modified based on discussion w/ EJ); should I instead just cite the poster? >>**
+We uploaded readings from each iButton using 1-wire software developer's kit for Windows (version 4.00; Maxim Integrated, Dallas, TX, USA). After converting the files into an appropriate format using Rhythm [@cooper2005], we **<< manually? >>** identified off-bouts and measured their duration from the temperature data in Raven Pro (version 1.5; Cornell Lab of Ornithology, Ithaca, NY, USA). We defined an off-bout as the time interval elapsing between the temperature recording just prior to the bird's departure from the nest (indicated by a sudden decrease in temperature in the time-series) until the time of the recording made just prior to her return (indicated by a sharp rise in temperature). Because the precise signature of off-bouts varied, we based our classification on the following criteria: (1) a minimum duration of 10 minutes, (2) a total temperature difference of at least 2°C, and (3) a minimum initial absolute slope in the temperature--time plot of 0.1°C/minute (0.4°C between sequential recordings). **<< These criteria are from Cole's poster (w/ #1 modified based on discussion w/ EJ); should I instead just cite the poster? >>**
 
 Because iButtons sample temperature instantaneously rather than continuously, off-bout identification and duration measurements are subject to error that is inversely proportional to the sampling rate [@cooper2005]. We configured iButtons to log temperatures at 4-minute intervals; therefore, the maximum possible error in a single duration measurement (assuming it is correctly identified) is 8 minutes. This error is small compared to the mean measured off-bout duration and in relation to actual variation among off-bout durations (`r round(mean(bouts$Mins),1)` ± `r round(sd(bouts$Mins),1)` min [SD]). **<< Does this belong in the results? >>**
 
-```{r}
+```{r METHODSnotes2}
 
 # --note that nest age was not calculable for all nests
 # --note about derivation of wind speed and ambient temperature by linear interpolation
@@ -1607,11 +1609,10 @@ hiScorrs <- data.frame( which( abs( scorMat ) >= 0.5, arr.ind = TRUE ) ) %>%
 ## Summary: There are certainly strong correlations where I'd expect them (among AmbientTemp, TempDiff, and VPD). Picking just one of those seems like a good idea, and I would imagine TempDiff and/or VPD are more proximally important in governing off-bout decision making in chickens. Their correlation with one another isn't *so* strong (Pearson's r = -0.536, Spearman's rho = -0.521), but they're definitely related to one another. VPD is more like AmbientTemp than is TempDiff, so maybe I'll choose TempDiff, as the variable that's least alike relative to the others.
 ```
 
-```{r coRrs}
+```{r DURcoRrs}
 
 intVars <- c( "Nest age" = "NestAge", 
               "Temperature difference" = "TempDiff", 
-              "Vapor pressure deficit" = "VPD", 
               "VOR" = "VOR_AVG", 
               "Wind speed" = "WindSpeed", 
               "Distance to nearest turbine" = "Turbine_Distance_m", 
@@ -1649,6 +1650,76 @@ var.corrs <- var.corrs %>%
 yr.wilcox <- yr.wilcox %>% 
   mutate( WilcoxonW = sapply( Ytests, function( .htest ) .htest$statistic ), 
           WilcoxonP = sapply( Ytests, function( .htest ) .htest$p.value ) )
+
+corrs.table <- var.corrs %>% 
+  dplyr::select( -starts_with( "Pearson" ) ) %>% 
+  mutate( X1 = sapply( X = X1, FUN = function( .nn ) names( intVars )[ intVars %in% .nn ] ), 
+          X2 = sapply( X = X2, FUN = function( .nn ) names( intVars )[ intVars %in% .nn ] ), 
+          SpearmanP = sapply( X = SpearmanP, FUN = function( .pp ) ifelse( .pp < 0.0001, "**<0.0001**", 
+                                                                           ifelse( .pp < 0.001, "**<0.001**", 
+                                                                                   ifelse( .pp < 0.01, "**<0.01**", 
+                                                                                           ifelse( .pp < 0.05, paste( "**", round( .pp, 3 ), "**", sep = "" ), 
+                                                                                                   as.character( round( .pp, 3 ) ) ) ) ) ) ) )
+
+knitr::kable( x = corrs.table, 
+              format = "pandoc", 
+              digits = 3, 
+              col.names = c( "", "", "Spearman's $\\rho$", "*p*" ), 
+              caption = "Spearman's rank correlation coefficients for all covariates considered for inclusion in the models. We calculated estimates for Spearman's $\\rho$ using an asymptotic *t* approximation.")
+
+```
+
+```{r FREQcoRrs}
+
+intVars <- c( "Nest age" = "NestAge", 
+              "Ambient temperature" = "AmbientTemp", 
+              "VOR" = "VOR_AVG", 
+              "Wind speed" = "WindSpeed", 
+              "Precipitation" = "Precipitation", 
+              "Distance to nearest turbine" = "Turbine_Distance_m", 
+              "Distance to nearest road" = "Roads_Distance_m", 
+              "Distance to nearest water source" = "Water_Distance_m", 
+              "Ordinal date" = "Jday" )
+
+var.corrs <- data.frame( t( combn( x = intVars, m = 2 ) ), stringsAsFactors = FALSE )
+yr.wilcox <- data.frame( X1 = intVars, X2 = "fYear", stringsAsFactors = FALSE )
+tm.kruskal <- data.frame( X1 = intVars, X2 = "blockID", stringsAsFactors = FALSE )
+
+Pcorrs <- with( var.corrs, map2( .x = as.list( X1 ), 
+                                 .y = as.list( X2 ), 
+                                 .f = function( xx, yy ) cor.test( x = freqData[ , xx ], 
+                                                                   y = freqData[ , yy ], 
+                                                                   alternative = "two.sided", 
+                                                                   method = "pearson" ) ) )
+Scorrs <- with( var.corrs, map2( .x = as.list( X1 ), 
+                                 .y = as.list( X2 ), 
+                                 .f = function( xx, yy ) cor.test( x = freqData[ , xx ], 
+                                                                   y = freqData[ , yy ], 
+                                                                   alternative = "two.sided", 
+                                                                   method = "spearman", 
+                                                                   exact = FALSE ) ) )
+Ytests <- with( yr.wilcox, map2( .x = as.list( X1 ), 
+                                 .y = as.list( X2 ), 
+                                 .f = function( xx, yy ) wilcox.test( freqData[ , xx ] ~ freqData[ , yy ], 
+                                                                      alternative = "two.sided" ) ) )
+
+Ttests <- with( tm.kruskal, map2( .x = as.list( X1 ), 
+                                  .y = as.list( X2 ), 
+                                  .f = function( xx, yy ) kruskal.test( freqData[ , xx ] ~ freqData[ , yy ] ) ) )
+
+var.corrs <- var.corrs %>% 
+  mutate( PearsonR = sapply( Pcorrs, function( .htest ) .htest$estimate ), 
+          PearsonP = sapply( Pcorrs, function( .htest ) .htest$p.value ), 
+          SpearmanR = sapply( Scorrs, function( .htest ) .htest$estimate ), 
+          SpearmanP = sapply( Scorrs, function( .htest ) .htest$p.value ) )
+
+yr.wilcox <- yr.wilcox %>% 
+  mutate( WilcoxonW = sapply( Ytests, function( .htest ) .htest$statistic ), 
+          WilcoxonP = sapply( Ytests, function( .htest ) .htest$p.value ) )
+
+tm.kruskal <- tm.kruskal %>% 
+  mutate( KruskalX2 = sapply( Ttests, function( .htest ) .htest$statistic ), 
+          KruskalP = sapply( Ttests, function( .htest ) .htest$p.value ) )
 
 corrs.table <- var.corrs %>% 
   dplyr::select( -starts_with( "Pearson" ) ) %>% 
@@ -1846,11 +1917,21 @@ dur.ranef_topMod <- dur.ranef_fit[[ which.min( dur.ranef_delta ) ]]
 
 ```
 
-We created (generalized) linear mixed models ([G]LMMs) of off-bout duration and frequency using nest (hen) ID as a grouping factor in the random-effects structure. A Box-Cox power transformation of off-bout duration suggested that the variable was approximately log-normally distributed (maximum likelihood estimate for $\lambda$ = `r l_est.dur`). We therefore used a Gaussian error distribution and identity link function to model the natural-log-transformed duration.
+We created (generalized) linear mixed models ([G]LMMs) of off-bout duration and frequency using nest (hen) ID as a grouping factor in the random-effects structure. When considering covariates to include each model, we assessed correlations between continuous predictors using Spearman's rank correlation coefficient ($\rho$), and between continuous and categorical predictors using the Kruskal-Wallis rank sum test (when the categorical predictor had >2 levels) or the Mann-Whitney *U* test (when the categorical predictor had 2 levels). **<< discardment?? >>**
 
-Using a global (maximal) fixed-effects structure, we fit models with different random-effects strctures and selected among them using Akaike's Information Criterion with a second-order correction for small sample size (AIC$_c$; [@anderson2008]) following the procedure described by Zuur et al. [-@zuur2009] for selecting the most parsimonious mixed-effects model. The LMMs of off-bout duration were fit using restricted maximum likelihood (REML) to minimize bias in the random-effects estimates [@zuur2009]. We then selected a fixed-effects structure using the top-ranked random effects structure. Whereas Zuur et al. [-@zuur2009] recommend selecting the optimal fixed-effects structure by stepwise backwards selection from the global model, we compared this approach with one using AIC$_c$-based model selection. In both cases, (and in both the duration and frequency analyses) models having different fixed effects were fitted and compared using maximum likelihood (ML) methods.
+A Box-Cox power transformation of off-bout duration suggested that the variable was approximately log-normally distributed (maximum likelihood estimate for $\lambda$ = `r l_est.dur`). We therefore used a Gaussian error distribution and identity link function to model the natural-log-transformed duration. We considered the following covariates in models of log-transformed off-bout duration: year (as a categorical variable with two levels); nest age (days since the initiation of incubation); average VOR; wind speed; ordinal date; the signed difference between the ambient temperature (measured at the Ainsworth airport) and that of the nest just prior to off-bout initiation; and the distances from the nest to the nearest turbine, road, and water source. In addition, we considered the possibility for first-order interactions between nest age and ambient--nest temperature difference, between wind speed and the distance to the nearest wind turbine, and between ordinal date and the distance to the nearest water source. Thus, the global fixed-effects structure takes the form:
 
-We performed all calculations and statistical procedures in R (version 3.X.X; R Foundation for Statistical Computing, Vienna, Austria) using the package lme4 [@R-lme4] for functionality associated with mixed-effects modeling.
+$$ \beta_0 + \beta_{Year} + \beta_{NestAge} + \beta_{NestAge:TempDiff} + \beta_{TempDiff} + \beta_{VOR} + \beta_{WindSpeed} + \beta_{WindSpeed:TurbineDistance} + \beta_{TurbineDistance} + \beta_{RoadsDistance} + \beta_{WaterDistance} + \beta_{WaterDistance:Date} + \beta_{Date}, $$
+
+where $\beta_p$ represents the parameterized estimate for the effect of the variable $p$ on the response.
+
+We modeled off-bout frequency as the log-likelihood that a hen initiated an off-bout during a particular 3-hour block of time during the recording period (*i.e.*, from the time of the first recorded off-bout until the nest was presumed to have hatched or failed). Because hens either did (probability = 1) or did not (probability = 0) initiate off-bouts during each block, this approach assumed a Bernoulli error distribution and used a logit link function to model the response. In addition to the variables listed above for the off-bout duration model (but using ambient temperature only rather than the temperature difference), we also considered precipitation and time of day as potential influences on the frequency of off-bout initation. For the latter model, we considered the possibility of first-order interactions between nest age and ambient temperature, between wind speed and the distance to the nearest wind turbine, between turbine distance and time block, between wind speed and time block, and between the distance to the nearest water source and ordinal date. Our global model of off-bout frequency had the form
+
+$$ \beta_0 + \beta_{Year} + \beta_{NestAge} + \beta_{NestAge:Temp} + \beta_{Temp} + \beta_{VOR} + \beta_{Precipitation} + \beta_{WindSpeed} + \beta_{WindSpeed:TurbineDistance} + \beta_{TurbineDistance} + \beta{TurbineDistance:Time} + \beta_{Time} + \beta_{WindSpeed:Time} + \beta_{RoadsDistance} + \beta_{WaterDistance} + \beta_{WaterDistance:Date} + \beta_{Date}. $$
+
+Before fitting the models, we mean-centered all continuous covariates and scaled them by one standard deviation to improve model convergence. We also used sum-to-zero contrasts on categorical predictors having >2 levels (*i.e.*, time block). Using a global (maximal) fixed-effects structure, we fit models with different random-effects strctures and selected among them using Akaike's Information Criterion with a second-order correction for small sample size (AIC$_c$; [@anderson2008]) following the procedure described by Zuur et al. [-@zuur2009] for selecting the most parsimonious mixed-effects model. The LMMs of off-bout duration were fit using restricted maximum likelihood (REML) to minimize bias in the random-effects estimates [@zuur2009]. We then selected a fixed-effects structure using the top-ranked random effects structure. Whereas Zuur et al. [-@zuur2009] recommend selecting the optimal fixed-effects structure by stepwise backwards selection from the global model, we compared this approach with one using AIC$_c$-based model selection for the off-bout duration analysis, and used only AIC$_c$-based selection to . In both cases, (and in both the duration and frequency analyses) models having different fixed effects were fitted and compared using maximum likelihood (ML) methods.
+
+We performed all calculations and statistical procedures in R (version 3.3.1; R Foundation for Statistical Computing, Vienna, Austria) using the package lme4 [@R-lme4] for functionality associated with mixed-effects modeling.
 
 -----
 
@@ -2918,8 +2999,6 @@ freq.ranef_topMod <- freq.ranef_fit[[ which.min( freq.ranef_delt ) ]]
 
 ```
 
-We modeled off-bout frequency as the log-likelihood that a hen initiated an off-bout during a particular 3-hour block of time during the recording period (*i.e.*, from the time of the first recorded off-bout until the nest was presumed to have hatched or failed). The latter model assumed a Bernoulli error distribution and logit link function.
-
 ```{r FREQfixefSelection}
 
 freq.fixef_forms <- list( int = numBouts ~ 1 + ( blockID | fID ), 
@@ -2993,6 +3072,8 @@ freq.mod_aicc <- freq.fixef_fits[[ which.min( freq.fixef_delt ) ]]
 
 ```
 
+-----
+
 ```{r FREQfixefAICcSets}
 
 freq.sets <- c( A = "fYear", 
@@ -3031,7 +3112,7 @@ if( !exists( "freq.set_fits" ) ){
   }
 }
 
-freq.set_aicc <- lapply( X = freq.set_fits, FUN = AICc )
+freq.set_aicc <- sapply( X = freq.set_fits, FUN = AICc )
 freq.set_delt <- freq.set_aicc - min( freq.set_aicc )
 freq.set_wgts <- exp( -0.5 * freq.set_delt )
 freq.set_wgts <- freq.set_wgts / sum( freq.set_wgts )
@@ -3068,12 +3149,13 @@ freq.fixef_ests <- freq.fixef_ests %>%
              avg_SE = sqrt( avg_var ), 
              tstat = avg_est / avg_SE, 
              p.val = 2 * pt( q = abs( tstat ), 
-                             df = min( sapply( X = dur.fixef_fits.set, 
+                             df = min( sapply( X = freq.set_fits, 
                                                FUN = df.residual ) ), 
                              lower.tail = FALSE ) )
 
 ```
 
+-----
 
 ```{r FREQvalidatR}
 
@@ -3086,7 +3168,7 @@ freq.test_aicc <- augment( freq.mod_aicc ) %>%
           .qresid = qres2( freq.mod_aicc ), 
           .hat = hatvalues( freq.mod_aicc ) ) %>% 
   dplyr::select( -.rownames )
-# ests <- influence.ME::influence( freq.mod_be, obs = TRUE )
+# ests <- influence.ME::influence( freq.mod_aicc, obs = TRUE )
 # freq.test_aicc$.cooksd <- cooks.distance( ests )[ which( !is.na( freqData$WindSpeed ) & !is.na( freqData$NestAge ) ) ]
 
 rVf_freq.aicc <- ggplot( data = freq.test_aicc, 
@@ -3152,7 +3234,7 @@ cowplot::plot_grid( rVf_freq.aicc, qq_freq.aicc, sl_freq.aicc, lev_freq.aicc, nr
 rVna_freq.aicc <- ggplot( data = freq.test_aicc, 
                           aes( x = NestAge, 
                                y = .qresid ) ) + 
-  geom_hline( colour = "grey", 
+  geom_hline( yintercept = 0, 
               linetype = "dashed" ) + 
   geom_point( alpha = 0.4 ) + 
   theme_classic() + 
@@ -3162,7 +3244,7 @@ rVna_freq.aicc <- ggplot( data = freq.test_aicc,
 rVat_freq.aicc <- ggplot( data = freq.test_aicc, 
                           aes( x = AmbientTemp, 
                                y = .qresid ) ) + 
-  geom_hline( colour = "grey", 
+  geom_hline( yintercept = 0, 
               linetype = "dashed" ) + 
   geom_point( alpha = 0.4 ) + 
   theme_classic() + 
@@ -3172,7 +3254,7 @@ rVat_freq.aicc <- ggplot( data = freq.test_aicc,
 rVws_freq.aicc <- ggplot( data = freq.test_aicc, 
                           aes( x = WindSpeed, 
                                y = .qresid ) ) + 
-  geom_hline( colour = "grey", 
+  geom_hline( yintercept = 0, 
               linetype = "dashed" ) + 
   geom_point( alpha = 0.4 ) + 
   theme_classic() + 
@@ -3182,7 +3264,7 @@ rVws_freq.aicc <- ggplot( data = freq.test_aicc,
 rVtd_freq.aicc <- ggplot( data = freq.test_aicc, 
                           aes( x = Turbine_Distance_m, 
                                y = .qresid ) ) + 
-  geom_hline( colour = "grey", 
+  geom_hline( yintercept = 0, 
               linetype = "dashed" ) + 
   geom_point( alpha = 0.4 ) + 
   theme_classic() + 
@@ -3222,13 +3304,31 @@ nd <- expand.grid( NestAge = 0,
                    blockID = factor( levels( freqData$blockID ), levels = levels( freqData$blockID ) ) )
 contrasts( nd$blockID ) <- contr.sum( length( levels( nd$blockID ) ) )
 
+if( !exists( "freq.predict_aicc.boot.ws" ) ){
+  
+  if( length( fl <- list.files( pattern = "freq.predict_aicc.boot.ws.RData", recursive = TRUE ) ) > 0 ){
+    load( fl )
+  } else {
+    freq.predict_aicc.boot.ws <- bootMer( x = freq.mod_aicc, 
+                                          FUN = boot.fitter, 
+                                          nsim = 1000 )
+    
+    save( freq.predict_aicc.boot.ws, file = "data/freq.predict_aicc.boot.ws.RData" )
+  }
+}
+
+freq.predict_aicc.boot.wsCI <- t( apply( X = freq.predict_aicc.boot.ws$t, 
+                                         MARGIN = 2, 
+                                         FUN = quantile, 
+                                         probs = c( 0.025, 0.975 ) ) )
+
 freq.predict_ws <- nd %>%
   mutate( .mu = predict( freq.mod_aicc, 
                          newdata = nd, 
                          re.form = ~0, 
                          type = "response" ), 
-          # lo.95 = freq.predict_bootCI[ , 1 ],
-          # hi.95 = freq.predict_bootCI[ , 2 ],
+          lo.95 = freq.predict_aicc.boot.wsCI[ , 1 ],
+          hi.95 = freq.predict_aicc.boot.wsCI[ , 2 ],
           NestAge_r = ( NestAge * sd( freqData$NestAge, na.rm = TRUE ) ) + mean( freqData$NestAge, na.rm = TRUE ), 
           AmbientTemp_r = ( AmbientTemp * sd( freqData$AmbientTemp, na.rm = TRUE ) ) + mean( freqData$AmbientTemp, na.rm = TRUE ), 
           WindSpeed_r = ( WindSpeed * sd( freqData$WindSpeed, na.rm = TRUE ) ) + mean( freqData$WindSpeed, na.rm = TRUE ), 
@@ -3259,9 +3359,9 @@ freq.predict_ws.plot <- ggplot( data = freq.predict_ws,
         linetype = "Distance to nearest turbine (m)" ) + 
   facet_wrap( ~blockID )
 
-```
+# ```
 
-```{r FREQpredictRnestAge}
+# ```{r FREQpredictRnestAge}
 
 nd <- expand.grid( NestAge = ( seq( from = floor( min( freqData$NestAge, na.rm = TRUE ) ), 
                                     to = ceiling( max( freqData$NestAge, na.rm = TRUE ) ), 
@@ -3269,13 +3369,31 @@ nd <- expand.grid( NestAge = ( seq( from = floor( min( freqData$NestAge, na.rm =
                    WindSpeed = 0, 
                    Jday = 0 )
 
+if( !exists( "freq.predict_aicc.boot.na" ) ){
+  
+  if( length( fl <- list.files( pattern = "freq.predict_aicc.boot.na.RData", recursive = TRUE ) ) > 0 ){
+    load( fl )
+  } else {
+    freq.predict_aicc.boot.na <- bootMer( x = freq.mod_aicc, 
+                                          FUN = boot.fitter, 
+                                          nsim = 1000 )
+    
+    save( freq.predict_aicc.boot.na, file = "data/freq.predict_aicc.boot.na.RData" )
+  }
+}
+
+freq.predict_aicc.boot.naCI <- t( apply( X = freq.predict_aicc.boot.na$t, 
+                                         MARGIN = 2, 
+                                         FUN = quantile, 
+                                         probs = c( 0.025, 0.975 ) ) )
+
 freq.predict_na <- nd %>%
   mutate( .mu = predict( freq.mod_be, 
                          newdata = nd, 
                          re.form = ~0, 
                          type = "response" ), 
-          lo.95 = dur.predict_bootCI[ , 1 ],
-          hi.95 = dur.predict_bootCI[ , 2 ],
+          lo.95 = freq.predict_aicc.boot.naCI[ , 1 ],
+          hi.95 = freq.predict_aicc.boot.naCI[ , 2 ],
           NestAge_r = ( NestAge * sd( freqData$NestAge, na.rm = TRUE ) ) + mean( freqData$NestAge, na.rm = TRUE ), 
           WindSpeed_r = ( WindSpeed * sd( freqData$WindSpeed, na.rm = TRUE ) ) + mean( freqData$WindSpeed, na.rm = TRUE ), 
           Jday_r = ( Jday * sd( freqData$Jday, na.rm = TRUE ) ) + mean( freqData$Jday, na.rm = TRUE ), 
@@ -3305,52 +3423,6 @@ freq.predict_na.plot <- ggplot( data = freq.predict_na,
         y = "Probability of off-bout initiation" )
 
 ```
-
-```{r FREQpredictRjDay}
-
-nd <- expand.grid( NestAge = 0, 
-                   WindSpeed = 0, 
-                   Jday = ( seq( from = floor( min( freqData$Jday, na.rm = TRUE ) ), 
-                                 to = ceiling( max( freqData$Jday, na.rm = TRUE ) ), 
-                                 by = 0.5 ) - mean( freqData$Jday, na.rm = TRUE ) ) / sd( freqData$Jday, na.rm = TRUE ) )
-
-freq.predict_jd <- nd %>%
-  mutate( .mu = predict( freq.mod_be, 
-                         newdata = nd, 
-                         re.form = ~0, 
-                         type = "response" ), 
-          lo.95 = dur.predict_bootCI[ , 1 ],
-          hi.95 = dur.predict_bootCI[ , 2 ],
-          NestAge_r = ( NestAge * sd( freqData$NestAge, na.rm = TRUE ) ) + mean( freqData$NestAge, na.rm = TRUE ), 
-          WindSpeed_r = ( WindSpeed * sd( freqData$WindSpeed, na.rm = TRUE ) ) + mean( freqData$WindSpeed, na.rm = TRUE ), 
-          Jday_r = ( Jday * sd( freqData$Jday, na.rm = TRUE ) ) + mean( freqData$Jday, na.rm = TRUE ), 
-          lo.95_r = exp( lo.95 ), 
-          hi.95_r = exp( hi.95 ) )
-
-freq.predict_jd.plot <- ggplot( data = freq.predict_jd, 
-                                aes( x = Jday_r, 
-                                     y = .mu ) ) + 
-  geom_line() + 
-  geom_rug( data = filter( freqData, numBouts > 0 ), 
-            inherit.aes = FALSE, 
-            aes( x = Jday, 
-                 y = numBouts ), 
-            sides = "t", 
-            position = "jitter", 
-            alpha = 0.4 ) + 
-  geom_rug( data = filter( freqData, numBouts == 0 ), 
-            inherit.aes = FALSE, 
-            aes( x = Jday, 
-                 y = numBouts ), 
-            sides = "b", 
-            position = "jitter", 
-            alpha = 0.4 ) + 
-  theme_classic() + 
-  labs( x = "Ordinal date", 
-        y = "Probability of off-bout initiation" )
-
-```
-
 
 ###**RESULTS** {#results}
 
@@ -3408,6 +3480,39 @@ The top-ranked random-effects structure for off-bout duration included both a ra
 ```
 
 ###**APPENDIX** {#appendix}
+
+####**Variables**
+
+```{r vaRiables}
+
+vaRs <- data.frame( Variable = c( "Year", 
+                                  "Nest age", 
+                                  "Ambient temperature", 
+                                  "Temperature difference", 
+                                  "Precipitation", 
+                                  "VOR", 
+                                  "Wind speed", 
+                                  "Distance to nearest turbine", 
+                                  "Distance to nearest road", 
+                                  "Distance to nearest water source", 
+                                  "Ordinal date", 
+                                  "Time block" ), 
+                    Explanation = c( "Categorical; year during which observations for the nest occurred (2013, 2014)", 
+                                     "Interval; days after initiation of incubation (0--28)", 
+                                     "Interval; °C temperature recorded at the Ainsworth Regional Airport", 
+                                     "Interval; °C difference between the ambient temperature and the temperature recorded on the nest just prior to the start of the off-bout", 
+                                     "Interval; inches of precipitation falling during the 20-minute period encompassing the start of the off-bout", 
+                                     "Interval; ", 
+                                     "Interval", 
+                                     "Interval; straight-line distance in meters between the nest and the nearest wind turbine", 
+                                     "Interval; straight-line distance in meters between the nest and the nearest road", 
+                                     "Interval; straight-line distance in meters between the nest and the nearest water source", 
+                                     "Interval; number day of the year", 
+                                     "Categorical; time block during which the observation occurred (01:30--04:30, 04:30--07:30, 07:30--10:30...)" ), 
+                    Duration = c( "X", "X", "", "X", "", "X", "X", "X", "X", "X", "X", "" ), 
+                    Frequency = c( "X", "X", "X", "", "X", "X", "X", "X", "X", "X", "X", "X" ) )
+
+```
 
 ###**CODE** {#code}
 
